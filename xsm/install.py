@@ -142,6 +142,27 @@ def launcher() -> str:
     return os.path.join(REPO, "bin", "xsm")
 
 
+def agents_dir() -> str:
+    """Codex's shared agent directory. Read through a function, and overridable,
+    so a test never writes into the person's real one."""
+    return os.path.realpath(os.path.expanduser(
+        os.environ.get("XSM_AGENTS_DIR") or "~/.agents"))
+
+
+def skills_root(home: str, runtime: str = "claude") -> str:
+    """Where this runtime looks for skills.
+
+    Claude reads its own home. Codex reads `~/.agents/skills` as well: the path
+    is compiled into the binary beside `.codex/config.toml` and `.codex/hooks`,
+    and a session with nothing in its own home finds the skill there all the
+    same (checked against codex 0.156 on 2026-09-24). So one copy serves every
+    Codex home on this machine, and a copy per home is duplication that drifts
+    out of step — which is what had happened by the time anyone looked.
+    """
+    return os.path.join(agents_dir(), "skills") if runtime == "codex" \
+        else os.path.join(home, "skills")
+
+
 def command_files() -> list:
     pattern = os.path.join(REPO, "commands", "xsm-*.md")
     return sorted(glob.glob(pattern))
@@ -299,7 +320,7 @@ def install_codex_commands(home: str) -> list:
     remove_orphans(home, "codex")
     for source in command_files():
         name = os.path.basename(source)[:-3]
-        target = os.path.join(home, "skills", name)
+        target = os.path.join(skills_root(home, "codex"), name)
         existing = _read_text(os.path.join(target, "SKILL.md"))
         if os.path.islink(target) or (existing is not None and FILE_MARKER not in existing) \
                 or (existing is None and os.path.exists(target)):
@@ -317,7 +338,7 @@ def install_codex_commands(home: str) -> list:
 def remove_codex_commands(home: str) -> int:
     removed = 0
     for source in command_files():
-        target = os.path.join(home, "skills", os.path.basename(source)[:-3])
+        target = os.path.join(skills_root(home, "codex"), os.path.basename(source)[:-3])
         body = _read_text(os.path.join(target, "SKILL.md"))
         if body is not None and FILE_MARKER in body and not os.path.islink(target):
             shutil.rmtree(target, ignore_errors=True)
@@ -353,20 +374,20 @@ def stale_copies(home: str, runtime: str = "claude") -> list:
             if body is not None and FILE_MARKER in body and \
                     body != open(source, encoding="utf-8").read().replace("{{XSM}}", launcher()):
                 out.append(target)
-        state, detail = skill_state(home)
+        state, detail = skill_state(home, "claude")
         if state == "copy-stale":
             out.append(detail)
     else:
         for source in command_files():
             name = os.path.basename(source)[:-3]
-            target = os.path.join(home, "skills", name, "SKILL.md")
+            target = os.path.join(skills_root(home, "codex"), name, "SKILL.md")
             body = _read_text(target)
             if body is not None and FILE_MARKER in body and body != codex_command_skill(source)[0]:
                 out.append(target)
     return out
 
 
-def skill_state(home: str) -> tuple:
+def skill_state(home: str, runtime: str = "claude") -> tuple:
     """(state, detail) for the skill in this home.
 
     linked        our symlink, in step with the repo
@@ -376,7 +397,7 @@ def skill_state(home: str) -> tuple:
     foreign       something else lives there; we leave it alone
     absent        nothing there yet
     """
-    target = os.path.join(home, "skills", "xsm")
+    target = os.path.join(skills_root(home, runtime), "xsm")
     source = os.path.join(REPO, "skills", "xsm")
     if os.path.islink(target):
         return ("linked" if os.path.realpath(target) == os.path.realpath(source)
@@ -397,21 +418,21 @@ def skill_state(home: str) -> tuple:
     return "foreign", target
 
 
-def install_skill(home: str, refresh: bool = False) -> tuple:
+def install_skill(home: str, refresh: bool = False, runtime: str = "claude") -> tuple:
     """Link the skill so the session knows the commands exist. A link keeps it in
     step with the repo; anything already there that is not ours is left be.
 
     With `refresh`, a copy that has fallen behind is rewritten: it is our file,
     and telling a person to run `cp` is how two profiles ended up eight
     versions behind (2026-09-23)."""
-    state, detail = skill_state(home)
+    state, detail = skill_state(home, runtime)
     if state == "copy-stale" and refresh:
         with open(detail, "w", encoding="utf-8") as fh:
             fh.write(open(os.path.join(REPO, "skills", "xsm", "SKILL.md"), encoding="utf-8").read())
         return "copy-current", detail
     if state != "absent":
         return state, detail
-    target = os.path.join(home, "skills", "xsm")
+    target = os.path.join(skills_root(home, runtime), "xsm")
     os.makedirs(os.path.dirname(target), exist_ok=True)
     os.symlink(os.path.join(REPO, "skills", "xsm"), target)
     return "linked", target
@@ -524,7 +545,7 @@ def orphaned_commands(home: str, runtime: str = "claude") -> list:
             if os.path.basename(p) not in ours and body and FILE_MARKER in body:
                 out.append(p)
     else:
-        for p in glob.glob(os.path.join(home, "skills", "xsm-*", "SKILL.md")):
+        for p in glob.glob(os.path.join(skills_root(home, "codex"), "xsm-*", "SKILL.md")):
             if os.path.basename(os.path.dirname(p)) + ".md" not in ours and \
                     FILE_MARKER in (_read_text(p) or ""):
                 out.append(os.path.dirname(p))
@@ -544,6 +565,38 @@ def remove_orphans(home: str, runtime: str = "claude") -> list:
     return gone
 
 
+def codex_home_leftovers(home: str) -> list:
+    """Ours, still sitting in a Codex home's own `skills/` directory. Codex now
+    finds the skill in `~/.agents/skills`, so a per-home copy is a second one
+    that nothing keeps in step (2026-09-24). Only what carries our marker, or
+    is our own link, is listed; anything else in there belongs to someone."""
+    if os.path.realpath(skills_root(home, "codex")) == os.path.realpath(
+            os.path.join(home, "skills")):
+        return []                       # this home *is* the shared directory
+    found = []
+    link = os.path.join(home, "skills", "xsm")
+    if os.path.islink(link) and os.path.realpath(link) == os.path.realpath(
+            os.path.join(REPO, "skills", "xsm")):
+        found.append(link)
+    for p in glob.glob(os.path.join(home, "skills", "xsm-*", "SKILL.md")):
+        if FILE_MARKER in (_read_text(p) or "") and not os.path.islink(os.path.dirname(p)):
+            found.append(os.path.dirname(p))
+    return sorted(found)
+
+
+def remove_codex_home_leftovers(home: str) -> list:
+    gone = codex_home_leftovers(home)
+    for p in gone:
+        if os.path.islink(p):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        else:
+            shutil.rmtree(p, ignore_errors=True)
+    return gone
+
+
 def remove_commands(home: str) -> int:
     removed = 0
     for source in command_files():
@@ -555,15 +608,15 @@ def remove_commands(home: str) -> int:
     return removed
 
 
-def remove_skill(home: str) -> bool:
-    target = os.path.join(home, "skills", "xsm")
+def remove_skill(home: str, runtime: str = "claude") -> bool:
+    target = os.path.join(skills_root(home, runtime), "xsm")
     source = os.path.join(REPO, "skills", "xsm")
     if os.path.islink(target) and os.path.realpath(target) == os.path.realpath(source):
         os.unlink(target)
         return True
     # A copy we wrote (install_skill --refresh writes one where a home cannot
     # take our link). Its first line is ours, so it is not someone else's file.
-    state, detail = skill_state(home)
+    state, detail = skill_state(home, runtime)
     if state in ("copy-current", "copy-stale") and \
             (_read_text(detail) or "").startswith("---\nname: xsm\n"):
         shutil.rmtree(target, ignore_errors=True)
@@ -757,6 +810,9 @@ def doctor() -> dict:
                     if h.get("runtime") == "claude"},
         "stale": {h["path"]: stale_copies(h["path"], h.get("runtime") or "claude")
                   for h in config.homes()},
+        "codex_skills": skills_root("", "codex"),
+        "codex_home_leftovers": {h["path"]: codex_home_leftovers(h["path"])
+                                 for h in config.homes() if h.get("runtime") == "codex"},
         "leftovers": {h["path"]: leftovers(h["path"]) for h in config.homes()
                       if h.get("runtime") == "claude"},
         "stuck": stuck(),

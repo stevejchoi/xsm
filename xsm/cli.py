@@ -719,7 +719,7 @@ def cmd_install(args) -> int:
             }.get(outcome, outcome))
         if runtime == "codex":
             if not args.no_commands:
-                state, _ = install.install_skill(home, refresh=args.refresh)
+                state, _ = install.install_skill(home, refresh=args.refresh, runtime="codex")
                 print("  skill: %s" % {"linked": "linked to the repo",
                                         "copy-current": "a copy is in place and matches the repo",
                                         "copy-stale": "a copy has fallen behind the repo",
@@ -729,6 +729,13 @@ def cmd_install(args) -> int:
                 written = install.install_codex_commands(home)
                 print("  commands (as skills): %s" % (", ".join(
                     "$" + os.path.basename(w) for w in written) if written else "none written"))
+                print("  skills live in %s, which every Codex home here reads"
+                      % install.skills_root(home, "codex"))
+                moved = install.remove_codex_home_leftovers(home)
+                if moved:
+                    print("  removed %d older cop%s from %s"
+                          % (len(moved), "y" if len(moved) == 1 else "ies",
+                             os.path.join(home, "skills")))
             print("  Codex asks you to trust hooks once, at the next session start. "
                   "Until you do, the hook does not run. Codex has no SessionEnd, so a "
                   "stopped Codex session always reads as stale.")
@@ -742,7 +749,9 @@ def cmd_uninstall(args) -> int:
         result = install.remove(home, runtime)
         if install.remove_mcp(home, runtime):
             print("%s: removed the MCP server" % home)
-        if runtime == "codex" and install.remove_skill(home):
+        if runtime == "codex":
+            install.remove_codex_home_leftovers(home)
+        if runtime == "codex" and install.remove_skill(home, "codex"):
             print("%s: unlinked the skill" % home)
         if runtime == "codex":
             gone = install.remove_codex_commands(home)
@@ -799,6 +808,13 @@ def cmd_doctor(args) -> int:
         print("codex      %s: hooks %s" % (home, "trusted" if not missing else
               "NOT trusted for %s — start codex there and choose 'Trust all and continue'"
               % ", ".join(missing)))
+    if report.get("codex_skills"):
+        print("skills     %-45s read by every Codex home" % _home_tilde(report["codex_skills"]))
+    for home, files in (report.get("codex_home_leftovers") or {}).items():
+        if files:
+            print("codex      %s: %d older skill cop%s in its own skills/; `xsm install "
+                  "--codex-home %s` clears them" % (_home_tilde(home), len(files),
+                                                    "y" if len(files) == 1 else "ies", home))
     if not report.get("tmux"):
         print("tmux       not found: `xsm spawn` needs it (messaging does not)")
     for home, plugin in (report.get("plugins") or {}).items():

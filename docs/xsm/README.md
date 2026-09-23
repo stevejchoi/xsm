@@ -35,7 +35,12 @@ python3 -m xsm uninstall --claude-home ~/.claude-3
 
 설치가 홈에 명령 파일을 넣는다. 세션에서 그대로 쓴다.
 
-Codex에는 슬래시 명령이 없어서, 설치는 같은 명령을 이름이 같은 스킬(`skills/xsm-list/` 등)로 넣는다.
+Codex에는 슬래시 명령이 없어서, 설치는 같은 명령을 이름이 같은 스킬(`xsm-list` 등)로 넣는다.
+**넣는 곳은 Codex 홈이 아니라 `~/.agents/skills`다.** 그 경로는 codex 바이너리에 `.codex/config.toml`,
+`.codex/hooks`와 나란히 박혀 있어서, 자기 홈에 아무것도 없는 세션도 거기서 스킬을 찾는다(codex 0.156으로
+2026-09-24 확인). 홈마다 한 벌씩 넣으면 사본이 늘고 서로 어긋나므로 — 실제로 어긋난 뒤에야 알았다 —
+한 벌만 둔다. `xsm install`은 옛 위치(`<홈>/skills/`)에 우리가 넣어 둔 것을 치운다. 마커가 없는 남의
+스킬은 건드리지 않는다. Claude는 자기 홈(`<홈>/skills/`)을 그대로 쓴다.
 Codex에서는 `/xsm-list` 대신 `$xsm-list`로 부른다. Claude의 `!`명령`` 선실행이 Codex에는 없으므로
 스킬 본문은 모델에게 명령을 실행해 출력을 그대로 옮기라고 지시한다. 모델이 스스로 부르지 않도록
 `agents/openai.yaml`에 `allow_implicit_invocation: false`를 둔다.

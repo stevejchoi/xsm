@@ -22,6 +22,7 @@ class VectorCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="xsm-vec-")
         os.environ["XSM_HOME"] = self.tmp
+        os.environ["XSM_AGENTS_DIR"] = os.path.join(self.tmp, "agents")
         for mod in [m for m in list(sys.modules) if m.startswith("xsm")]:
             del sys.modules[mod]
         from xsm import paths

@@ -33,6 +33,10 @@ class TempState(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="xsm-test-")
         os.environ["XSM_HOME"] = self.tmp
+        # Codex reads skills from ~/.agents/skills, and install writes (and
+        # prunes) there. Point it inside the temp directory: a test that
+        # removed an orphan would otherwise remove the person's own.
+        os.environ["XSM_AGENTS_DIR"] = os.path.join(self.tmp, "agents")
         for mod in [m for m in list(sys.modules) if m.startswith("xsm")]:
             del sys.modules[mod]
         from xsm import paths, registry
@@ -556,13 +560,14 @@ class RenamedCommandTest(TempState):
     def test_a_codex_skill_for_a_renamed_command_goes_too(self):
         from xsm import install
         home = os.path.join(self.tmp, "codex-home")
-        stale = os.path.join(home, "skills", "xsm-inbox")
+        root = install.skills_root(home, "codex")
+        stale = os.path.join(root, "xsm-inbox")
         os.makedirs(stale)
         with open(os.path.join(stale, "SKILL.md"), "w") as fh:
             fh.write("---\nname: xsm-inbox\n---\nold\n" + install.FILE_MARKER + "\n")
         install.install_codex_commands(home)
         self.assertFalse(os.path.exists(stale))
-        self.assertTrue(os.path.exists(os.path.join(home, "skills", "xsm-log", "SKILL.md")))
+        self.assertTrue(os.path.exists(os.path.join(root, "xsm-log", "SKILL.md")))
 
 
 class WorkerPolicyTest(TempState):
@@ -1279,21 +1284,23 @@ class CommandInstallTest(TempState):
         written = install.install_codex_commands(home)
         self.assertEqual(sorted(os.path.basename(w) for w in written),
                          sorted(os.path.basename(f)[:-3] for f in install.command_files()))
-        skill = open(os.path.join(home, "skills", "xsm-list", "SKILL.md")).read()
+        root = install.skills_root(home, "codex")
+        self.assertNotIn(home, root, "one shared directory, not a copy per Codex home")
+        skill = open(os.path.join(root, "xsm-list", "SKILL.md")).read()
         self.assertIn("name: xsm-list\n", skill)
         self.assertIn(install.launcher() + " list --table", skill,
                       "Codex does not run !`cmd`; the model is told to")
         self.assertNotIn("!`", skill)
         self.assertIn("not in a code block", skill, "a table is left for the TUI to draw")
         self.assertNotIn("{{XSM}}", skill)
-        policy = open(os.path.join(home, "skills", "xsm-list", "agents", "openai.yaml")).read()
+        policy = open(os.path.join(root, "xsm-list", "agents", "openai.yaml")).read()
         self.assertIn("allow_implicit_invocation: false", policy)
-        send = open(os.path.join(home, "skills", "xsm-send", "SKILL.md")).read()
+        send = open(os.path.join(root, "xsm-send", "SKILL.md")).read()
         self.assertIn("$xsm-send", send)
         self.assertNotIn("$ARGUMENTS", send)
         self.assertIn("xsm_send", send, "the sandbox route is spelled out")
         self.assertEqual(install.remove_codex_commands(home), len(written))
-        self.assertFalse(os.path.exists(os.path.join(home, "skills", "xsm-list")))
+        self.assertFalse(os.path.exists(os.path.join(root, "xsm-list")))
 
     def test_a_foreign_codex_skill_of_the_same_name_survives(self):
         from xsm import install
@@ -2023,3 +2030,58 @@ class OutcomeTest(TempState):
             scope="repo:x", kind="note"))
         self.assertNotIn("--outcome", envelope.sender_context(note),
                          "a note closes nothing; the command it offers stays as it was")
+
+
+class CodexSharedSkillsTest(TempState):
+    """Codex reads ~/.agents/skills, so one copy serves every Codex home.
+    Before 2026-09-24 xsm wrote a copy into each home and they drifted."""
+
+    def test_every_codex_home_gets_the_same_directory(self):
+        from xsm import install
+        a = os.path.join(self.tmp, "codex-a")
+        b = os.path.join(self.tmp, "codex-b")
+        self.assertEqual(install.skills_root(a, "codex"), install.skills_root(b, "codex"))
+        self.assertEqual(install.skills_root(a, "claude"), os.path.join(a, "skills"),
+                         "Claude still reads its own home")
+
+    def test_the_skill_is_linked_once_for_all_of_them(self):
+        from xsm import install
+        a = os.path.join(self.tmp, "codex-a")
+        b = os.path.join(self.tmp, "codex-b")
+        state, target = install.install_skill(a, runtime="codex")
+        self.assertEqual(state, "linked")
+        self.assertEqual(install.skill_state(b, "codex"), ("linked", target),
+                         "the second home needs no install of its own")
+        self.assertEqual(install.skill_state(b, "claude")[0], "absent",
+                         "and a Claude home is untouched by it")
+
+    def test_an_older_per_home_copy_is_removed(self):
+        from xsm import install
+        home = os.path.join(self.tmp, "codex-old")
+        os.makedirs(os.path.join(home, "skills"))
+        link = os.path.join(home, "skills", "xsm")
+        os.symlink(os.path.join(install.REPO, "skills", "xsm"), link)
+        cmd = os.path.join(home, "skills", "xsm-list")
+        os.makedirs(cmd)
+        with open(os.path.join(cmd, "SKILL.md"), "w") as fh:
+            fh.write("---\nname: xsm-list\n---\nold\n" + install.FILE_MARKER + "\n")
+        theirs = os.path.join(home, "skills", "xsm-theirs")
+        os.makedirs(theirs)
+        with open(os.path.join(theirs, "SKILL.md"), "w") as fh:
+            fh.write("---\nname: xsm-theirs\n---\nnot ours\n")
+        self.assertEqual(install.codex_home_leftovers(home), sorted([link, cmd]))
+        gone = install.remove_codex_home_leftovers(home)
+        self.assertEqual(sorted(gone), sorted([link, cmd]))
+        self.assertFalse(os.path.exists(link))
+        self.assertFalse(os.path.exists(cmd))
+        self.assertTrue(os.path.exists(theirs), "no marker, not ours, left alone")
+
+    def test_removal_does_not_touch_a_home_that_is_the_shared_directory(self):
+        from xsm import install
+        home = os.path.dirname(install.skills_root("", "codex"))
+        os.makedirs(os.path.join(home, "skills"), exist_ok=True)
+        link = os.path.join(home, "skills", "xsm")
+        os.symlink(os.path.join(install.REPO, "skills", "xsm"), link)
+        self.assertEqual(install.codex_home_leftovers(home), [],
+                         "the shared directory is where the skill belongs")
+        self.assertTrue(os.path.exists(link))
