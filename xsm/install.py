@@ -136,6 +136,20 @@ def _backup(target: str) -> str:
     return candidate
 
 
+def _set_aside(target: str) -> str:
+    """Move a directory out of the way under a name nothing else will take.
+    Renamed rather than copied: the point is that it stops being found where
+    it was, and a rename cannot half-succeed and leave two of it."""
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    candidate = "%s.xsm-backup-%s" % (target, stamp)
+    suffix = 1
+    while os.path.exists(candidate):
+        candidate = "%s.xsm-backup-%s-%d" % (target, stamp, suffix)
+        suffix += 1
+    os.rename(target, candidate)
+    return candidate
+
+
 def launcher() -> str:
     """The absolute `xsm` a slash command should run. The launcher in the repo
     works wherever it is called from, so commands never depend on PATH."""
@@ -614,21 +628,29 @@ def codex_home_leftovers(home: str) -> list:
 
 
 def remove_codex_home_leftovers(home: str) -> list:
-    """Remove only the copies that are still exactly ours. Never called by
-    `install`, which adds; a person asks for it with `xsm install --prune` or
-    `xsm uninstall`."""
+    """Take our own copies out of a Codex home's `skills/`. [(path, backup)].
+
+    Ours to remove, so `install` does it: leaving them means Codex reads two
+    copies of the same skill and the stale one can win, which is the whole
+    reason for moving to one directory. Nothing without our marker is touched.
+
+    A copy someone has edited is still moved out — a second copy that wins over
+    the shared one is the problem — but its directory is kept aside first, the
+    way hooks.json is, so the edit is never simply lost. The backup path comes
+    back with it so the caller can say where it went."""
     gone = []
     for p, kind in codex_home_leftovers(home):
-        if kind != "ours":
-            continue
+        backup = ""
         try:
             if os.path.islink(p):
-                os.unlink(p)
+                os.unlink(p)            # a link holds nothing; there is nothing to keep
+            elif kind == "ours":
+                shutil.rmtree(p)        # byte for byte what we write; nothing to keep
             else:
-                shutil.rmtree(p)
+                backup = _set_aside(p)  # edited, or holding a file we never wrote
         except OSError:
-            continue                    # report it as still there rather than claim it went
-        gone.append(p)
+            continue                    # leave it listed rather than claim it went
+        gone.append((p, backup))
     return gone
 
 

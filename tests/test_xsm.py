@@ -2081,7 +2081,8 @@ class CodexSharedSkillsTest(TempState):
         self.assertEqual(install.codex_home_leftovers(home),
                          sorted([(link, "ours"), (cmd, "ours")]))
         gone = install.remove_codex_home_leftovers(home)
-        self.assertEqual(sorted(gone), sorted([link, cmd]))
+        self.assertEqual(sorted(p for p, _b in gone), sorted([link, cmd]))
+        self.assertEqual([b for _p, b in gone], ["", ""], "nothing to keep: it was ours")
         self.assertFalse(os.path.exists(link))
         self.assertFalse(os.path.exists(cmd))
         self.assertTrue(os.path.exists(theirs), "no marker, not ours, left alone")
@@ -2094,36 +2095,37 @@ class CodexSharedSkillsTest(TempState):
         body = open(os.path.join(cmd, "SKILL.md")).read()
         open(os.path.join(cmd, "SKILL.md"), "w").write(body + "\nmy own note\n")
         self.assertIn((cmd, "changed"), install.codex_home_leftovers(home))
-        self.assertEqual(install.remove_codex_home_leftovers(home), [link])
-        self.assertTrue(os.path.exists(cmd), "edited: reported, never removed")
+        gone = dict(install.remove_codex_home_leftovers(home))
+        self.assertEqual(gone[link], "", "a link holds nothing to keep")
+        self.assertFalse(os.path.exists(cmd), "it must stop being read where it was")
+        kept = gone[cmd]
+        self.assertTrue(kept and os.path.isdir(kept), "the edit is set aside, not lost")
+        self.assertIn("my own note", open(os.path.join(kept, "SKILL.md")).read())
 
-    def test_a_file_left_beside_ours_keeps_the_directory(self):
+    def test_a_file_left_beside_ours_is_kept_too(self):
+        """A directory moves whole, so a file we never wrote goes with it
+        rather than being deleted underneath its owner."""
         from xsm import install
         home, _link, cmd, _theirs = self._old_home()
         open(os.path.join(cmd, "notes.md"), "w").write("mine\n")
         self.assertIn((cmd, "changed"), install.codex_home_leftovers(home))
-        install.remove_codex_home_leftovers(home)
-        self.assertTrue(os.path.exists(os.path.join(cmd, "notes.md")),
-                        "a directory is removed whole, so one file of theirs saves it")
+        kept = dict(install.remove_codex_home_leftovers(home))[cmd]
+        self.assertEqual(open(os.path.join(kept, "notes.md")).read(), "mine\n")
 
-    def test_install_reports_but_does_not_remove(self):
-        """`install` adds. Deleting somewhere the caller did not name is not
-        what an install command should do."""
+    def test_install_takes_our_old_copies_out(self):
+        """Left behind, Codex reads the same skill twice and the stale copy can
+        win — which is the whole reason for one shared directory."""
         import contextlib
         import io
-        from xsm import cli, install
-        home, link, cmd, _theirs = self._old_home()
+        from xsm import cli
+        home, link, cmd, theirs = self._old_home()
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             cli.main(["install", "--codex-home", home])
-        self.assertTrue(os.path.exists(link), "still there after install")
-        self.assertTrue(os.path.exists(cmd))
-        self.assertIn("--prune", out.getvalue())
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            cli.main(["install", "--codex-home", home, "--prune"])
-        self.assertFalse(os.path.exists(link), "removed only when asked")
+        self.assertFalse(os.path.exists(link))
         self.assertFalse(os.path.exists(cmd))
+        self.assertTrue(os.path.exists(theirs), "not ours, never touched")
+        self.assertIn("removed our older copy", out.getvalue())
 
     def test_removal_does_not_touch_a_home_that_is_the_shared_directory(self):
         from xsm import install
