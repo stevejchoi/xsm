@@ -731,11 +731,23 @@ def cmd_install(args) -> int:
                     "$" + os.path.basename(w) for w in written) if written else "none written"))
                 print("  skills live in %s, which every Codex home here reads"
                       % install.skills_root(home, "codex"))
-                moved = install.remove_codex_home_leftovers(home)
-                if moved:
-                    print("  removed %d older cop%s from %s"
-                          % (len(moved), "y" if len(moved) == 1 else "ies",
-                             os.path.join(home, "skills")))
+                # Reported, not removed: `install` adds. Deleting somewhere the
+                # caller did not name is not what an install command should do.
+                old = install.codex_home_leftovers(home)
+                if old and args.prune:
+                    gone = install.remove_codex_home_leftovers(home)
+                    kept = [p for p, k in old if k != "ours"]
+                    print("  removed %d older cop%s from %s" % (
+                        len(gone), "y" if len(gone) == 1 else "ies",
+                        os.path.join(home, "skills")))
+                    for p in kept:
+                        print("  kept %s: it has been edited since we wrote it" % p)
+                elif old:
+                    print("  %d older cop%s still in %s (%s). They are read too, so a stale "
+                          "one can win. Remove them with --prune." % (
+                              len(old), "y" if len(old) == 1 else "ies",
+                              os.path.join(home, "skills"),
+                              ", ".join(sorted({k for _p, k in old}))))
             print("  Codex asks you to trust hooks once, at the next session start. "
                   "Until you do, the hook does not run. Codex has no SessionEnd, so a "
                   "stopped Codex session always reads as stale.")
@@ -750,7 +762,8 @@ def cmd_uninstall(args) -> int:
         if install.remove_mcp(home, runtime):
             print("%s: removed the MCP server" % home)
         if runtime == "codex":
-            install.remove_codex_home_leftovers(home)
+            for p in install.remove_codex_home_leftovers(home):
+                print("%s: removed an older copy at %s" % (home, p))
         if runtime == "codex" and install.remove_skill(home, "codex"):
             print("%s: unlinked the skill" % home)
         if runtime == "codex":
@@ -811,10 +824,17 @@ def cmd_doctor(args) -> int:
     if report.get("codex_skills"):
         print("skills     %-45s read by every Codex home" % _home_tilde(report["codex_skills"]))
     for home, files in (report.get("codex_home_leftovers") or {}).items():
-        if files:
-            print("codex      %s: %d older skill cop%s in its own skills/; `xsm install "
-                  "--codex-home %s` clears them" % (_home_tilde(home), len(files),
-                                                    "y" if len(files) == 1 else "ies", home))
+        if not files:
+            continue
+        ours = [p for p, k in files if k == "ours"]
+        changed = [p for p, k in files if k != "ours"]
+        if ours:
+            print("codex      %s: %d older skill cop%s in its own skills/, read alongside the "
+                  "shared one; `xsm install --codex-home %s --prune` removes them"
+                  % (_home_tilde(home), len(ours), "y" if len(ours) == 1 else "ies", home))
+        for p in changed:
+            print("codex      %s: edited since we wrote it; xsm will not remove it"
+                  % _home_tilde(p))
     if not report.get("tmux"):
         print("tmux       not found: `xsm spawn` needs it (messaging does not)")
     for home, plugin in (report.get("plugins") or {}).items():
@@ -1583,6 +1603,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="re-write what xsm installed in every home it knows")
     ins.add_argument("--force", action="store_true",
                      help="install into a home that already has the xsm plugin")
+    ins.add_argument("--prune", action="store_true",
+                     help="also remove skill copies an earlier xsm left in a Codex home's own "
+                          "skills/ (only the ones still exactly as we wrote them)")
     ins.set_defaults(func=cmd_install)
 
     un = sub.add_parser("uninstall", help="remove only the hook groups xsm added")

@@ -2055,26 +2055,75 @@ class CodexSharedSkillsTest(TempState):
         self.assertEqual(install.skill_state(b, "claude")[0], "absent",
                          "and a Claude home is untouched by it")
 
-    def test_an_older_per_home_copy_is_removed(self):
+    def _old_home(self):
+        """A Codex home as an earlier xsm left it: our link, our command skill
+        exactly as written, and someone else's skill beside them."""
         from xsm import install
         home = os.path.join(self.tmp, "codex-old")
-        os.makedirs(os.path.join(home, "skills"))
+        os.makedirs(os.path.join(home, "skills"), exist_ok=True)
         link = os.path.join(home, "skills", "xsm")
         os.symlink(os.path.join(install.REPO, "skills", "xsm"), link)
         cmd = os.path.join(home, "skills", "xsm-list")
-        os.makedirs(cmd)
-        with open(os.path.join(cmd, "SKILL.md"), "w") as fh:
-            fh.write("---\nname: xsm-list\n---\nold\n" + install.FILE_MARKER + "\n")
+        source = next(s for s in install.command_files()
+                      if os.path.basename(s) == "xsm-list.md")
+        skill, yaml = install.codex_command_skill(source)
+        os.makedirs(os.path.join(cmd, "agents"))
+        open(os.path.join(cmd, "SKILL.md"), "w").write(skill)
+        open(os.path.join(cmd, "agents", "openai.yaml"), "w").write(yaml)
         theirs = os.path.join(home, "skills", "xsm-theirs")
         os.makedirs(theirs)
-        with open(os.path.join(theirs, "SKILL.md"), "w") as fh:
-            fh.write("---\nname: xsm-theirs\n---\nnot ours\n")
-        self.assertEqual(install.codex_home_leftovers(home), sorted([link, cmd]))
+        open(os.path.join(theirs, "SKILL.md"), "w").write("---\nname: xsm-theirs\n---\nnot ours\n")
+        return home, link, cmd, theirs
+
+    def test_an_untouched_per_home_copy_is_removed(self):
+        from xsm import install
+        home, link, cmd, theirs = self._old_home()
+        self.assertEqual(install.codex_home_leftovers(home),
+                         sorted([(link, "ours"), (cmd, "ours")]))
         gone = install.remove_codex_home_leftovers(home)
         self.assertEqual(sorted(gone), sorted([link, cmd]))
         self.assertFalse(os.path.exists(link))
         self.assertFalse(os.path.exists(cmd))
         self.assertTrue(os.path.exists(theirs), "no marker, not ours, left alone")
+
+    def test_a_copy_someone_edited_is_reported_and_kept(self):
+        """The marker survives an edit, so deleting by the marker alone would
+        take a person's change with no backup."""
+        from xsm import install
+        home, link, cmd, _theirs = self._old_home()
+        body = open(os.path.join(cmd, "SKILL.md")).read()
+        open(os.path.join(cmd, "SKILL.md"), "w").write(body + "\nmy own note\n")
+        self.assertIn((cmd, "changed"), install.codex_home_leftovers(home))
+        self.assertEqual(install.remove_codex_home_leftovers(home), [link])
+        self.assertTrue(os.path.exists(cmd), "edited: reported, never removed")
+
+    def test_a_file_left_beside_ours_keeps_the_directory(self):
+        from xsm import install
+        home, _link, cmd, _theirs = self._old_home()
+        open(os.path.join(cmd, "notes.md"), "w").write("mine\n")
+        self.assertIn((cmd, "changed"), install.codex_home_leftovers(home))
+        install.remove_codex_home_leftovers(home)
+        self.assertTrue(os.path.exists(os.path.join(cmd, "notes.md")),
+                        "a directory is removed whole, so one file of theirs saves it")
+
+    def test_install_reports_but_does_not_remove(self):
+        """`install` adds. Deleting somewhere the caller did not name is not
+        what an install command should do."""
+        import contextlib
+        import io
+        from xsm import cli, install
+        home, link, cmd, _theirs = self._old_home()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.main(["install", "--codex-home", home])
+        self.assertTrue(os.path.exists(link), "still there after install")
+        self.assertTrue(os.path.exists(cmd))
+        self.assertIn("--prune", out.getvalue())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.main(["install", "--codex-home", home, "--prune"])
+        self.assertFalse(os.path.exists(link), "removed only when asked")
+        self.assertFalse(os.path.exists(cmd))
 
     def test_removal_does_not_touch_a_home_that_is_the_shared_directory(self):
         from xsm import install

@@ -565,11 +565,38 @@ def remove_orphans(home: str, runtime: str = "claude") -> list:
     return gone
 
 
+def _untouched_command_skill(target: str) -> bool:
+    """A command skill still exactly as we wrote it: our two files, our exact
+    content, and nothing else beside them.
+
+    The marker alone is not enough to delete by. It survives an edit, so a
+    person who changed the file would lose that change with no backup, and a
+    file they added next to it would go with the directory."""
+    name = os.path.basename(target)
+    source = next((s for s in command_files() if os.path.basename(s)[:-3] == name), None)
+    if source is None:
+        return False
+    skill, yaml = codex_command_skill(source)
+    want = {"SKILL.md": skill, os.path.join("agents", "openai.yaml"): yaml}
+    seen = set()
+    for root, _dirs, files in os.walk(target):
+        for f in files:
+            rel = os.path.relpath(os.path.join(root, f), target)
+            if rel not in want or _read_text(os.path.join(target, rel)) != want[rel]:
+                return False
+            seen.add(rel)
+    return seen == set(want)
+
+
 def codex_home_leftovers(home: str) -> list:
-    """Ours, still sitting in a Codex home's own `skills/` directory. Codex now
-    finds the skill in `~/.agents/skills`, so a per-home copy is a second one
-    that nothing keeps in step (2026-09-24). Only what carries our marker, or
-    is our own link, is listed; anything else in there belongs to someone."""
+    """[(path, "ours"|"changed")] — what an earlier xsm put in a Codex home's
+    own `skills/`. Codex now finds the skill in `~/.agents/skills`, so a
+    per-home copy is a second one that nothing keeps in step (2026-09-24).
+
+    "ours" is byte for byte what we write and is safe to remove. "changed"
+    carries our marker but has been edited, or has a file beside it that we
+    never wrote; it is reported and left alone. Anything without the marker is
+    not listed at all."""
     if os.path.realpath(skills_root(home, "codex")) == os.path.realpath(
             os.path.join(home, "skills")):
         return []                       # this home *is* the shared directory
@@ -577,23 +604,31 @@ def codex_home_leftovers(home: str) -> list:
     link = os.path.join(home, "skills", "xsm")
     if os.path.islink(link) and os.path.realpath(link) == os.path.realpath(
             os.path.join(REPO, "skills", "xsm")):
-        found.append(link)
+        found.append((link, "ours"))    # a link holds nothing; removing it loses nothing
     for p in glob.glob(os.path.join(home, "skills", "xsm-*", "SKILL.md")):
-        if FILE_MARKER in (_read_text(p) or "") and not os.path.islink(os.path.dirname(p)):
-            found.append(os.path.dirname(p))
+        target = os.path.dirname(p)
+        if FILE_MARKER not in (_read_text(p) or "") or os.path.islink(target):
+            continue
+        found.append((target, "ours" if _untouched_command_skill(target) else "changed"))
     return sorted(found)
 
 
 def remove_codex_home_leftovers(home: str) -> list:
-    gone = codex_home_leftovers(home)
-    for p in gone:
-        if os.path.islink(p):
-            try:
+    """Remove only the copies that are still exactly ours. Never called by
+    `install`, which adds; a person asks for it with `xsm install --prune` or
+    `xsm uninstall`."""
+    gone = []
+    for p, kind in codex_home_leftovers(home):
+        if kind != "ours":
+            continue
+        try:
+            if os.path.islink(p):
                 os.unlink(p)
-            except OSError:
-                pass
-        else:
-            shutil.rmtree(p, ignore_errors=True)
+            else:
+                shutil.rmtree(p)
+        except OSError:
+            continue                    # report it as still there rather than claim it went
+        gone.append(p)
     return gone
 
 
