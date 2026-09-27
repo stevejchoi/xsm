@@ -132,7 +132,7 @@ def _half_joined(a: dict, b: dict, cfg: dict) -> str:
     notes = []
     for mine, other in ((ja - jb, b), (jb - ja, a)):
         for name in sorted(mine):
-            notes.append("%s has not joined project %s (run /xsm-join %s there)"
+            notes.append("%s has not joined project %s (run /xsm join %s there)"
                          % (project_root(other.get("cwd") or "/"), name, name))
     return "; " + "; ".join(notes) if notes else ""
 

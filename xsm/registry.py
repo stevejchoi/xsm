@@ -317,7 +317,7 @@ def adopt_self() -> dict | None:
     run yet.
 
     Installing xsm into a home whose sessions are already open leaves each one
-    unregistered until its next prompt, and a display command like /xsm-who
+    unregistered until its next prompt, and a display command like /xsm who
     runs its shell before that prompt's hook fires — so the first thing a
     person tried after installing reported "not registered" (2026-09-22).
     Registration is consent (ADR-0001), and here it was already given: the

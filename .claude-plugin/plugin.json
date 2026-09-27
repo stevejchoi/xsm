@@ -15,7 +15,6 @@
     "orchestration",
     "multi-agent"
   ],
-  "commands": "./.claude-plugin/commands/",
   "skills": "./skills/",
   "hooks": "./hooks/hooks.json"
 }

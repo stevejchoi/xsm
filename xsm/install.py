@@ -25,7 +25,7 @@ import time
 from . import config, paths
 
 MARKER = "#xsm-hook"
-FILE_MARKER = "<!-- xsm-managed -->"        # commands we wrote, and may remove
+FILE_MARKER = "<!-- xsm-managed -->"        # command files earlier versions wrote
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # SessionEnd lets a clean exit read as `ended` rather than `stale`. Codex has
 # no SessionEnd event, so a stopped Codex session always reads as stale.
@@ -137,44 +137,10 @@ def _backup(target: str) -> str:
 
 
 def launcher() -> str:
-    """The absolute `xsm` a slash command should run. The launcher in the repo
-    works wherever it is called from, so commands never depend on PATH."""
+    """The absolute `xsm` for what xsm writes into another program's config (a
+    worker's allow-list, a statusLine). The launcher in the repo works wherever
+    it is called from, so those never depend on PATH."""
     return os.path.join(REPO, "bin", "xsm")
-
-
-def command_files() -> list:
-    pattern = os.path.join(REPO, "commands", "xsm-*.md")
-    return sorted(glob.glob(pattern))
-
-
-PLUGIN_COMMANDS = os.path.join(REPO, ".claude-plugin", "commands")
-
-
-def plugin_command(source: str) -> str:
-    """The same command, for the plugin. A plugin's files are copied as they
-    are, so there is no install step to put an absolute launcher in: the
-    plugin's own bin/ is on PATH while it is enabled, so `xsm` is enough.
-    The name loses its prefix because Claude namespaces a plugin's commands
-    itself: /xsm:list, not /xsm:xsm-list."""
-    body = open(source, encoding="utf-8").read().replace("{{XSM}}", "xsm")
-    return body.replace("/xsm-", "/xsm:")        # usage lines inside the body
-
-
-def plugin_command_files() -> dict:
-    """{path under .claude-plugin/commands: contents}"""
-    return {os.path.join(PLUGIN_COMMANDS, os.path.basename(s)[len("xsm-"):]): plugin_command(s)
-            for s in command_files()}
-
-
-def write_plugin_commands() -> list:
-    written = []
-    os.makedirs(PLUGIN_COMMANDS, exist_ok=True)
-    for target, body in plugin_command_files().items():
-        if _read_text(target) != body:
-            with open(target, "w", encoding="utf-8") as fh:
-                fh.write(body)
-        written.append(target)
-    return written
 
 
 def plugin_installed(home: str) -> str | None:
@@ -194,176 +160,24 @@ def plugin_installed(home: str) -> str | None:
     return None
 
 
-def install_commands(home: str) -> list:
-    """Write the slash commands into a Claude home with the launcher path filled
-    in. Written rather than symlinked because the path has to be substituted."""
-    target_dir = os.path.join(home, "commands")
-    os.makedirs(target_dir, exist_ok=True)
-    remove_orphans(home, "claude")
-    written = []
-    for source in command_files():
-        body = open(source, encoding="utf-8").read().replace("{{XSM}}", launcher())
-        target = os.path.join(target_dir, os.path.basename(source))
-        existing = _read_text(target)
-        if existing is not None and FILE_MARKER not in existing:
-            continue                        # someone else's command of the same name
-        if existing != body:
-            with open(target, "w", encoding="utf-8") as fh:
-                fh.write(body)
-        written.append(target)
-    return written
-
-
-def _frontmatter(text: str) -> tuple:
-    """(fields, body) of a command file's --- block; values stay strings."""
-    fields, body = {}, text
-    if text.startswith("---\n"):
-        head, _, body = text[4:].partition("\n---\n")
-        for line in head.splitlines():
-            key, _, value = line.partition(":")
-            fields[key.strip()] = value.strip()
-    return fields, body
-
-
-def codex_command_skill(source: str) -> tuple:
-    """(SKILL.md, agents/openai.yaml) for one slash command, in Codex's terms.
-
-    Codex has no slash commands of its own; a user types `$name` and gets a
-    skill (measured 2026-09-22: `$xsm` worked, `$xsm-list` did not exist). Two
-    things do not carry over. Claude runs `!`cmd`` before the model sees the
-    prompt; Codex does not, so the command is spelled out for the model to run.
-    And `disable-model-invocation` is `policy.allow_implicit_invocation: false`
-    in Codex, so the model never reaches for these on its own."""
-    name = os.path.basename(source)[:-3]
-    fields, body = _frontmatter(open(source, encoding="utf-8").read())
-    body = body.replace(FILE_MARKER, "").strip()
-    xsm = launcher()
-    shell = [line[2:-1] for line in body.splitlines()
-             if line.startswith("!`") and line.endswith("`")]
-    if shell:
-        # A Markdown table is passed through bare so the TUI draws it; anything
-        # else goes in a code block so its spacing survives.
-        tables = any("--table" in c for c in shell)
-        wrap = ("as it is, not in a code block, so the tables show as tables" if tables
-                else "inside one code block")
-        commands = [c.replace("{{XSM}}", xsm) for c in shell]
-        block = body[body.index("<<<") + 3:body.index(">>>")].strip("\n") \
-            if "<<<" in body and ">>>" in body else ""
-        layout = [ln for ln in block.splitlines() if ln.strip()]
-        if len(commands) == 1 and len(layout) == 1:
-            text = ("This is a display command. There is nothing to decide.\n\n"
-                    "Run this shell command, exactly as written:\n\n    %s\n\n"
-                    "Then reply with its output, copied exactly, %s. Nothing before it, "
-                    "nothing after it. Do not translate, reword, summarise or explain it, and "
-                    "run nothing else.\n" % (commands[0], wrap))
-        else:
-            # Headings between the outputs stay; each command's place is marked.
-            n = iter(range(1, len(commands) + 1))
-            template = "\n".join("[output of command %d]" % next(n)
-                                  if ln.startswith("!`") and ln.endswith("`") else ln
-                                  for ln in block.splitlines())
-            # No <<< >>> around the layout: Codex copied the markers into
-            # its reply (2026-09-23).
-            text = ("This is a display command. There is nothing to decide.\n\n"
-                    "Run these shell commands, exactly as written:\n\n%s\n\n"
-                    "Then reply with the layout below, each [output of command N] replaced by "
-                    "that command's output copied exactly, %s. Nothing before it, nothing after "
-                    "it. Do not translate, reword, summarise or explain it, and run nothing "
-                    "else.\n\n## Layout\n\n%s\n" % (
-                        "\n".join("%d. `%s`" % (i + 1, c) for i, c in enumerate(commands)),
-                        wrap, template))
-    else:
-        text = body.replace("{{XSM}}", xsm).replace("Bash command", "shell command")
-        text = text.replace("/" + name, "$" + name)
-        text = text.replace("Arguments: $ARGUMENTS",
-                            "Arguments: the words after `$%s` in the user's message." % name)
-        if "send <TARGET>" in text:
-            text += ("\nIf the shell command fails with `sandbox-blocked`, call the MCP tool "
-                     "`xsm_send` with the same target and text instead, and reply with its "
-                     "result the same way.\n")
-    description = fields.get("description", name)
-    if fields.get("argument-hint"):
-        description += " (usage: $%s %s)" % (name, fields["argument-hint"])
-    skill = "---\nname: %s\ndescription: %s\n---\n\n%s\n%s\n" % (
-        name, description, text.rstrip(), FILE_MARKER)
-    yaml = ("interface:\n  display_name: \"%s\"\n  short_description: \"%s\"\n"
-            "policy:\n  allow_implicit_invocation: false\n" % (
-                name, fields.get("description", name).replace('"', "'")))
-    return skill, yaml
-
-
-def install_codex_commands(home: str) -> list:
-    """The slash commands as skills in a Codex home, one directory each.
-    A directory that is not ours (no marker in its SKILL.md) is left alone."""
-    written = []
-    remove_orphans(home, "codex")
-    for source in command_files():
-        name = os.path.basename(source)[:-3]
-        target = os.path.join(home, "skills", name)
-        existing = _read_text(os.path.join(target, "SKILL.md"))
-        if os.path.islink(target) or (existing is not None and FILE_MARKER not in existing) \
-                or (existing is None and os.path.exists(target)):
-            continue
-        skill, yaml = codex_command_skill(source)
-        os.makedirs(os.path.join(target, "agents"), exist_ok=True)
-        for rel, text in (("SKILL.md", skill), (os.path.join("agents", "openai.yaml"), yaml)):
-            if _read_text(os.path.join(target, rel)) != text:
-                with open(os.path.join(target, rel), "w", encoding="utf-8") as fh:
-                    fh.write(text)
-        written.append(target)
-    return written
-
-
-def remove_codex_commands(home: str) -> int:
-    removed = 0
-    for source in command_files():
-        target = os.path.join(home, "skills", os.path.basename(source)[:-3])
-        body = _read_text(os.path.join(target, "SKILL.md"))
-        if body is not None and FILE_MARKER in body and not os.path.islink(target):
-            shutil.rmtree(target, ignore_errors=True)
-            removed += 1
-    return removed
-
-
 def leftovers(home: str) -> list:
     """Files an earlier `xsm install` left in a Claude home that has since
-    moved to the plugin. The plugin carries its own commands and skill, so
-    these are dead weight — and a stale copy of them reads as ours."""
+    moved to the plugin. The plugin carries its own skill, so these are dead
+    weight — and a personal skills/xsm takes the bare `/xsm` from the plugin's."""
     if not plugin_installed(home):
         return []
-    found = [p for p in glob.glob(os.path.join(home, "commands", "xsm-*.md"))
-             if FILE_MARKER in (_read_text(p) or "")]
     skill = os.path.join(home, "skills", "xsm")
-    if os.path.exists(skill):
-        found.append(skill)
-    return found
+    return [skill] if os.path.exists(skill) else []
 
 
 def stale_copies(home: str, runtime: str = "claude") -> list:
     """Files we installed into a home that no longer match the repository.
     A copied skill in a second profile sat eight versions behind for a day
     before anyone noticed (2026-09-23), because nothing compared them."""
-    out = []
-    if runtime == "claude":
-        if plugin_installed(home):
-            return []                   # the plugin keeps itself current
-        for source in command_files():
-            target = os.path.join(home, "commands", os.path.basename(source))
-            body = _read_text(target)
-            if body is not None and FILE_MARKER in body and \
-                    body != open(source, encoding="utf-8").read().replace("{{XSM}}", launcher()):
-                out.append(target)
-        state, detail = skill_state(home)
-        if state == "copy-stale":
-            out.append(detail)
-    else:
-        for source in command_files():
-            name = os.path.basename(source)[:-3]
-            target = os.path.join(home, "skills", name, "SKILL.md")
-            body = _read_text(target)
-            if body is not None and FILE_MARKER in body and body != codex_command_skill(source)[0]:
-                out.append(target)
-    return out
+    if runtime == "claude" and plugin_installed(home):
+        return []                       # the plugin keeps itself current
+    state, detail = skill_state(home)
+    return [detail] if state == "copy-stale" else []
 
 
 def _skill_tree() -> dict:
@@ -530,47 +344,39 @@ def remove_statusline(home: str) -> bool:
     return True
 
 
-def orphaned_commands(home: str, runtime: str = "claude") -> list:
-    """Files we installed for a command that no longer exists — a renamed one.
-    `/xsm-inbox` became `/xsm-log` (2026-09-23) and the old file would have
-    stayed, offering a command whose text we no longer maintain."""
-    ours = {os.path.basename(s) for s in command_files()}
+def retired_commands(home: str) -> list:
+    """The per-command files earlier versions wrote: `commands/xsm-*.md` in a
+    Claude home, `skills/xsm-*/` in a Codex one. The commands became arguments
+    of the one skill (`/xsm list`, `$xsm list`; 2026-09-27), and a copy left
+    behind offers a command whose text nobody maintains — in Codex, eight
+    skills beside `xsm` that were never skills.
+
+    Only what carries our marker is ours. A link is someone's own
+    arrangement, whatever it points at, and is left alone."""
     out = []
-    if runtime == "claude":
-        for p in glob.glob(os.path.join(home, "commands", "xsm-*.md")):
-            body = _read_text(p)
-            if os.path.basename(p) not in ours and body and FILE_MARKER in body:
-                out.append(p)
-    else:
-        for p in glob.glob(os.path.join(home, "skills", "xsm-*", "SKILL.md")):
-            if os.path.basename(os.path.dirname(p)) + ".md" not in ours and \
-                    FILE_MARKER in (_read_text(p) or ""):
-                out.append(os.path.dirname(p))
-    return out
+    for p in glob.glob(os.path.join(home, "commands", "xsm-*.md")):
+        if not os.path.islink(p) and FILE_MARKER in (_read_text(p) or ""):
+            out.append(p)
+    for d in glob.glob(os.path.join(home, "skills", "xsm-*")):
+        if not os.path.islink(d) and os.path.isdir(d) and \
+                FILE_MARKER in (_read_text(os.path.join(d, "SKILL.md")) or ""):
+            out.append(d)
+    return sorted(out)
 
 
-def remove_orphans(home: str, runtime: str = "claude") -> list:
-    gone = orphaned_commands(home, runtime)
-    for p in gone:
-        if os.path.isdir(p):
-            shutil.rmtree(p, ignore_errors=True)
-        else:
-            try:
+def remove_retired(home: str) -> list:
+    """Remove what `retired_commands` found; returns what is actually gone."""
+    gone = []
+    for p in retired_commands(home):
+        try:
+            if os.path.isdir(p):
+                shutil.rmtree(p)
+            else:
                 os.unlink(p)
-            except OSError:
-                pass
+        except OSError:
+            continue
+        gone.append(p)
     return gone
-
-
-def remove_commands(home: str) -> int:
-    removed = 0
-    for source in command_files():
-        target = os.path.join(home, "commands", os.path.basename(source))
-        body = _read_text(target)
-        if body is not None and FILE_MARKER in body:
-            os.unlink(target)
-            removed += 1
-    return removed
 
 
 def remove_skill(home: str) -> bool:
@@ -777,6 +583,8 @@ def doctor() -> dict:
                   for h in config.homes()},
         "leftovers": {h["path"]: leftovers(h["path"]) for h in config.homes()
                       if h.get("runtime") == "claude"},
+        "retired": {h["path"]: retired_commands(h["path"]) for h in config.homes()},
+        "xsm_on_path": shutil.which("xsm"),
         "stuck": stuck(),
         "limits": [
             "A peer message without the xsm envelope cannot be told apart from your own typing "

@@ -10,6 +10,7 @@ import argparse
 import glob
 import json
 import os
+import shutil
 import sys
 import time
 
@@ -308,7 +309,7 @@ def cmd_join(args) -> int:
     _print_members(scope, root)
     others = [m for m in scope["members"] if os.path.realpath(m["root"]) != root]
     if not others:
-        print("no other project has joined %s yet. In a session there, run: /xsm-join %s"
+        print("no other project has joined %s yet. In a session there, run: /xsm join %s"
               % (args.project, args.project))
         return OK
     reachable = [r for r in registry.records()
@@ -403,12 +404,12 @@ def cmd_projects(args) -> int:
                               ""))
         print("\n".join(_md_table(["project", "folder", "member of"], table)))
         if not config.projects():
-            print("\nNo named projects yet. Join one with `/xsm-join <name>` (Codex: `$xsm-join`).")
+            print("\nNo named projects yet. Join one with `/xsm join <name>` (Codex: `$xsm join <name>`).")
         return OK
     print("this folder (%s) is in: %s" % (_home_tilde(root), ", ".join(_memberships(here))))
     rows = config.projects()
     if not rows:
-        print("no named projects. Join one with: /xsm-join <name>  (or xsm join <name>)")
+        print("no named projects. Join one with: /xsm join <name>  (or xsm join <name>)")
         return OK
     print("named projects:")
     for scope in rows:
@@ -648,9 +649,11 @@ def cmd_install(args) -> int:
             continue
         if args.refresh:
             # Refreshing every home it knows must not stop at one that has
-            # moved to the plugin; the plugin updates itself by version.
+            # moved to the plugin; the plugin updates itself by version. What
+            # an earlier direct install left there is still ours to clear.
             print("%s: the xsm plugin (%s) keeps it up to date; skipped"
                   % (_home_tilde(home), plugin))
+            _print_retired(home, install.remove_retired(home))
             targets.remove((home, runtime))
             continue
         print("refused: %s has the xsm plugin (%s), which brings its own hooks; installing "
@@ -685,21 +688,23 @@ def cmd_install(args) -> int:
             print("already installed in %s (nothing changed)" % result["file"])
         else:
             print("installed into %s (backup: %s)" % (result["file"], result.get("backup", "none")))
-        if runtime == "claude" and not args.no_commands:
-            written = install.install_commands(home)
+        _print_retired(home, install.remove_retired(home))
+        if not args.no_commands:
             state, detail = install.install_skill(home, refresh=args.refresh)
-            print("  slash commands: %s" % ", ".join(
-                "/" + os.path.basename(w)[:-3] for w in written) if written else
-                "  slash commands: none written")
-            notes = {
+            print("  skill: %s" % {
                 "linked": "linked to the repo",
                 "copy-current": "a copy is in place and matches the repo",
                 "copy-stale": "a copy has fallen behind; refresh it with `xsm install --refresh`",
                 "nested-link": "a link sits inside the existing directory (%s);\n"
                                "           remove it: rm %s" % (detail, detail),
                 "foreign": "something else is at skills/xsm; left alone",
-            }
-            print("  skill: %s" % notes.get(state, state))
+            }.get(state, state))
+            print("  commands: %s" % ("/xsm list, /xsm send <target> <message>, … "
+                                      "(the skill takes them as arguments)" if runtime == "claude"
+                                      else "$xsm list, $xsm send <target> <message>, …"))
+            if not shutil.which("xsm"):
+                print("  warning: `xsm` is not on PATH, and the skill runs it by that name. "
+                      "Link it: ln -s %s ~/.local/bin/xsm" % install.launcher())
         if runtime == "claude" and args.statusline:
             outcome = install.install_statusline(home)
             print("  statusLine: %s" % {
@@ -715,21 +720,16 @@ def cmd_install(args) -> int:
                 "replaced": "re-registered with the current command",
             }.get(outcome, outcome))
         if runtime == "codex":
-            if not args.no_commands:
-                state, _ = install.install_skill(home, refresh=args.refresh)
-                print("  skill: %s" % {"linked": "linked to the repo",
-                                        "copy-current": "a copy is in place and matches the repo",
-                                        "copy-stale": "a copy has fallen behind the repo",
-                                        "nested-link": "a link sits inside the existing directory",
-                                        "foreign": "something else is at skills/xsm; left alone"
-                                        }.get(state, state))
-                written = install.install_codex_commands(home)
-                print("  commands (as skills): %s" % (", ".join(
-                    "$" + os.path.basename(w) for w in written) if written else "none written"))
             print("  Codex asks you to trust hooks once, at the next session start. "
                   "Until you do, the hook does not run. Codex has no SessionEnd, so a "
                   "stopped Codex session always reads as stale.")
     return USAGE if failed else OK
+
+
+def _print_retired(home: str, gone: list) -> None:
+    if gone:
+        print("  removed %d per-command file(s) from before /xsm <command>: %s" % (
+            len(gone), ", ".join(os.path.basename(p) for p in gone)))
 
 
 def cmd_uninstall(args) -> int:
@@ -739,18 +739,12 @@ def cmd_uninstall(args) -> int:
         result = install.remove(home, runtime)
         if install.remove_mcp(home, runtime):
             print("%s: removed the MCP server" % home)
-        if runtime == "codex" and install.remove_skill(home):
+        gone = install.remove_retired(home)
+        if gone:
+            print("%s: removed %d command file(s) from an earlier version" % (home, len(gone)))
+        if install.remove_skill(home):
             print("%s: unlinked the skill" % home)
-        if runtime == "codex":
-            gone = install.remove_codex_commands(home)
-            if gone:
-                print("%s: removed %d command skill(s)" % (home, gone))
         if runtime == "claude":
-            gone = install.remove_commands(home)
-            if gone:
-                print("%s: removed %d slash command file(s)" % (home, gone))
-            if install.remove_skill(home):
-                print("%s: unlinked the skill" % home)
             if install.remove_statusline(home):
                 print("%s: removed the xsm statusLine" % home)
         print("%s: removed %s xsm hook group(s)%s" % (
@@ -807,9 +801,16 @@ def cmd_doctor(args) -> int:
                   % (_home_tilde(home), len(files)))
     for home, files in (report.get("leftovers") or {}).items():
         if files:
-            print("leftover   %s: %d file(s) from an earlier `xsm install`; the plugin provides "
-                  "them now. Remove with `xsm uninstall --claude-home %s`"
-                  % (_home_tilde(home), len(files), _home_tilde(home)))
+            print("leftover   %s: a skills/xsm from an earlier `xsm install`; bare /xsm goes to "
+                  "it, not to the plugin. Remove with `xsm uninstall --claude-home %s`"
+                  % (_home_tilde(home), _home_tilde(home)))
+    for home, files in (report.get("retired") or {}).items():
+        if files:
+            print("retired    %s: %d per-command file(s) from before /xsm <command>; clear them "
+                  "with `xsm install --refresh`" % (_home_tilde(home), len(files)))
+    if not report.get("xsm_on_path"):
+        print("path       `xsm` is not on PATH; the skill runs it by that name "
+              "(ln -s %s ~/.local/bin/xsm)" % install.launcher())
     for line in _stuck_lines(report.get("stuck") or {}):
         print("stuck      %s" % line)
     for note in report["limits"]:
@@ -1347,7 +1348,7 @@ def build_parser() -> argparse.ArgumentParser:
     ls.add_argument("--json", action="store_true")
     ls.add_argument("--compact", action="store_true", help="short lines, no padding (for agents)")
     ls.add_argument("--table", action="store_true",
-                    help="a Markdown table, for a session's TUI to draw (the slash command uses it)")
+                    help="a Markdown table, for a session's TUI to draw (`/xsm <command>` uses it)")
     ls.set_defaults(func=cmd_list)
 
     who = sub.add_parser("who", help="identity of the session running this command")
@@ -1558,7 +1559,7 @@ def build_parser() -> argparse.ArgumentParser:
     ins.add_argument("--statusline", action="store_true",
                      help="also show peers in Claude's statusLine (never replaces an existing one)")
     ins.add_argument("--no-commands", action="store_true",
-                     help="hooks only: do not write the slash commands or link the skill")
+                     help="hooks only: do not link the skill")
     ins.add_argument("--no-mcp", action="store_true", help="do not register the xsm MCP server")
     ins.add_argument("--refresh", action="store_true",
                      help="re-write what xsm installed in every home it knows")

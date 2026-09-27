@@ -407,7 +407,8 @@ class PluginPackagingTest(TempState):
     def test_the_manifests_point_at_files_that_exist(self):
         plugin = self._json(".claude-plugin", "plugin.json")
         self.assertEqual(plugin["name"], "xsm")
-        for field in ("commands", "skills", "hooks"):
+        self.assertNotIn("commands", plugin, "the commands are arguments of the one skill now")
+        for field in ("skills", "hooks"):
             target = os.path.join(REPO, plugin[field][2:] if plugin[field].startswith("./")
                                   else plugin[field])
             self.assertTrue(os.path.exists(target), "%s -> %s" % (field, target))
@@ -439,29 +440,11 @@ class PluginPackagingTest(TempState):
         self.assertNotIn("env", server, "an empty XSM_HOME would mean the working directory")
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "xsm-mcp"), os.X_OK))
 
-    def test_the_plugin_commands_are_the_same_commands_without_the_prefix(self):
-        from xsm import install
-        for target, body in install.plugin_command_files().items():
-            self.assertTrue(os.path.exists(target), "%s is not written; run install.write_plugin_"
-                                                    "commands()" % target)
-            with open(target) as fh:
-                self.assertEqual(fh.read(), body, "%s is out of step with commands/" % target)
-            self.assertNotIn("{{XSM}}", body)
-            self.assertNotIn("/xsm-", body, "Claude namespaces these itself: /xsm:list")
-
-    def test_the_hook_launcher_refuses_a_peer_message_when_no_python_is_found(self):
-        """A hook that cannot start is a gate that is open (S8-g2)."""
-        import subprocess
-        launcher = os.path.join(REPO, "hooks", "xsm-hook")
-        env = dict(os.environ, XSM_PYTHON_CANDIDATES="/nonexistent-python")
-        peer = json.dumps({"hook_event_name": "UserPromptSubmit",
-                           "prompt": "<cross-session-message>\n[xsm v1 id=1]\nhi\n"
-                                     "</cross-session-message>"})
-        out = subprocess.run([launcher], input=peer, capture_output=True, text=True, env=env)
-        self.assertEqual(json.loads(out.stdout)["decision"], "block")
-        human = json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": "hello"})
-        out = subprocess.run([launcher], input=human, capture_output=True, text=True, env=env)
-        self.assertEqual(out.stdout.strip(), "", "a person is never locked out of their session")
+    def test_the_plugin_ships_the_skill_with_its_guide(self):
+        """Claude copies a plugin as it is; references/ has to be in the tree."""
+        for rel in ("SKILL.md", os.path.join("references", "guide.md")):
+            self.assertTrue(os.path.isfile(os.path.join(REPO, "skills", "xsm", rel)), rel)
+        self.assertFalse(os.path.exists(os.path.join(REPO, ".claude-plugin", "commands")))
 
 
 class BrokenCodexInstallTest(TempState):
@@ -530,39 +513,80 @@ class BrokenCodexInstallTest(TempState):
             self.assertEqual(workers._working_codex(), good)
 
 
-class RenamedCommandTest(TempState):
-    """`/xsm-inbox` showed the ledger while `xsm inbox` takes a Codex session's
-    messages: two different things under one name (user, 2026-09-23). The
-    display one is `/xsm-log` now, and the file it left behind in a home has
-    to go, or a session keeps offering a command nobody maintains."""
+class RetiredCommandTest(TempState):
+    """The per-command files became arguments of one skill: `/xsm list` in
+    Claude Code, `$xsm list` in Codex (2026-09-27). What earlier versions wrote
+    into a home has to go, or a session keeps offering commands nobody
+    maintains — in Codex, eight skills beside `xsm`."""
 
-    def test_the_old_file_is_removed_when_the_commands_are_written(self):
+    def _marked(self, path, text):
         from xsm import install
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(text + install.FILE_MARKER + "\n")
+
+    def test_install_clears_what_earlier_versions_wrote_and_nothing_else(self):
+        from xsm import cli, install
         home = os.path.join(self.tmp, "claude-home")
-        os.makedirs(os.path.join(home, "commands"))
-        old = os.path.join(home, "commands", "xsm-inbox.md")
-        with open(old, "w") as fh:
-            fh.write("---\ndescription: old\n---\nbody\n" + install.FILE_MARKER + "\n")
+        old = os.path.join(home, "commands", "xsm-list.md")
+        self._marked(old, "---\ndescription: old\n---\nbody\n")
         mine = os.path.join(home, "commands", "xsm-mine.md")
         with open(mine, "w") as fh:
             fh.write("---\ndescription: someone else's\n---\nkeep me\n")
-        self.assertEqual([os.path.basename(p) for p in install.orphaned_commands(home)],
-                         ["xsm-inbox.md"])
-        install.install_commands(home)
+        self.assertEqual(install.retired_commands(home), [old])
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli.main(["install", "--claude-home", home, "--no-mcp", "--python", sys.executable])
         self.assertFalse(os.path.exists(old))
         self.assertTrue(os.path.exists(mine), "only files carrying our marker are ours")
-        self.assertTrue(os.path.exists(os.path.join(home, "commands", "xsm-log.md")))
+        self.assertTrue(os.path.islink(os.path.join(home, "skills", "xsm")))
 
-    def test_a_codex_skill_for_a_renamed_command_goes_too(self):
+    def test_a_codex_command_skill_goes_and_the_main_skill_stays(self):
         from xsm import install
         home = os.path.join(self.tmp, "codex-home")
-        stale = os.path.join(home, "skills", "xsm-inbox")
-        os.makedirs(stale)
-        with open(os.path.join(stale, "SKILL.md"), "w") as fh:
-            fh.write("---\nname: xsm-inbox\n---\nold\n" + install.FILE_MARKER + "\n")
-        install.install_codex_commands(home)
+        stale = os.path.join(home, "skills", "xsm-list")
+        self._marked(os.path.join(stale, "SKILL.md"), "---\nname: xsm-list\n---\nold\n")
+        theirs = os.path.join(home, "skills", "xsm-theirs")
+        os.makedirs(theirs)
+        with open(os.path.join(theirs, "SKILL.md"), "w") as fh:
+            fh.write("---\nname: xsm-theirs\n---\nnot ours\n")
+        install.install_skill(home)
+        self.assertEqual(install.remove_retired(home), [stale])
         self.assertFalse(os.path.exists(stale))
-        self.assertTrue(os.path.exists(os.path.join(home, "skills", "xsm-log", "SKILL.md")))
+        self.assertTrue(os.path.exists(theirs))
+        self.assertTrue(os.path.islink(os.path.join(home, "skills", "xsm")))
+
+    def test_a_link_is_never_removed_whatever_it_points_at(self):
+        """A link is someone's own arrangement; the old cleanup unlinked one on
+        the Claude side and reported a failed rmtree as removed on the Codex side."""
+        from xsm import install
+        home = os.path.join(self.tmp, "linked-home")
+        real = os.path.join(self.tmp, "elsewhere")
+        self._marked(os.path.join(real, "xsm-list.md"), "body\n")
+        self._marked(os.path.join(real, "xsm-who", "SKILL.md"), "body\n")
+        os.makedirs(os.path.join(home, "commands"))
+        os.makedirs(os.path.join(home, "skills"))
+        os.symlink(os.path.join(real, "xsm-list.md"), os.path.join(home, "commands", "xsm-list.md"))
+        os.symlink(os.path.join(real, "xsm-who"), os.path.join(home, "skills", "xsm-who"))
+        self.assertEqual(install.retired_commands(home), [])
+        self.assertEqual(install.remove_retired(home), [])
+        self.assertTrue(os.path.islink(os.path.join(home, "commands", "xsm-list.md")))
+        self.assertTrue(os.path.islink(os.path.join(home, "skills", "xsm-who")))
+
+    def test_refresh_clears_them_on_a_plugin_home_too(self):
+        """A plugin home is skipped by --refresh, but a copy an earlier direct
+        install left there is still ours to clear."""
+        from xsm import cli, config, install, paths
+        home = os.path.join(self.tmp, "plugin-home")
+        old = os.path.join(home, "commands", "xsm-who.md")
+        self._marked(old, "body\n")
+        paths.write_json(os.path.join(home, "plugins", "installed_plugins.json"),
+                         {"version": 2, "plugins": {"xsm@xsm": [{"version": "0.4.0"}]}})
+        config.add_home(home, "claude")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.main(["install", "--refresh"])
+        self.assertFalse(os.path.exists(old))
+        self.assertIn("xsm-who.md", out.getvalue())
 
 
 class WorkerPolicyTest(TempState):
@@ -604,7 +628,7 @@ class ShippedFilesTest(TempState):
         rules = open(os.path.join(REPO, ".gitattributes")).read()
         for path in ("tests/", "tools/", "docs/spikes/", "docs/reviews/"):
             self.assertRegex(rules, r"%s\s+export-ignore" % re.escape(path))
-        for path in ("xsm", "hooks", "bin", "commands", "skills", ".claude-plugin"):
+        for path in ("xsm", "hooks", "bin", "skills", ".claude-plugin"):
             self.assertNotIn("\n%s/ " % path, rules, "%s has to ship" % path)
 
 
@@ -620,18 +644,12 @@ class InstallRefreshTest(TempState):
     def test_a_copy_that_fell_behind_is_reported_and_refreshed(self):
         from xsm import install
         home = self._home()
-        install.install_commands(home)
         skills = os.path.join(home, "skills", "xsm")
         os.makedirs(skills)
         with open(os.path.join(skills, "SKILL.md"), "w") as fh:
             fh.write("---\nname: xsm\n---\nan old copy\n")
-        target = os.path.join(home, "commands", "xsm-list.md")
-        with open(target, "a") as fh:
-            fh.write("\nstale line\n")
-        self.assertEqual(sorted(os.path.basename(p) for p in install.stale_copies(home)),
-                         ["xsm", "xsm-list.md"])
+        self.assertEqual(install.stale_copies(home), [skills])
         self.assertEqual(install.install_skill(home, refresh=True)[0], "copy-current")
-        install.install_commands(home)
         self.assertEqual(install.stale_copies(home), [])
 
     def test_a_home_with_the_plugin_is_seen(self):
@@ -663,16 +681,15 @@ class LeftoverTest(TempState):
     def test_a_home_on_the_plugin_reports_leftovers_instead_of_staleness(self):
         from xsm import install, paths
         home = os.path.join(self.tmp, "claude-home")
-        os.makedirs(os.path.join(home, "commands"))
-        install.install_commands(home)
+        os.makedirs(home)
         install.install_skill(home)
         self.assertEqual(install.leftovers(home), [], "not on the plugin yet")
         paths.write_json(os.path.join(home, "plugins", "installed_plugins.json"),
                          {"version": 2, "plugins": {"xsm@xsm": [{"version": "0.3.1"}]}})
-        self.assertEqual(len(install.leftovers(home)), len(install.command_files()) + 1)
+        self.assertEqual(install.leftovers(home), [os.path.join(home, "skills", "xsm")],
+                         "a personal skills/xsm takes the bare /xsm from the plugin")
         self.assertEqual(install.stale_copies(home), [], "the plugin keeps itself current")
         self.assertTrue(install.remove_skill(home))
-        self.assertEqual(install.remove_commands(home), len(install.command_files()))
         self.assertEqual(install.leftovers(home), [])
 
     def test_a_copied_skill_is_removed_on_uninstall_too(self):
@@ -1231,24 +1248,13 @@ class DefaultHomePrefixTest(TempState):
 
 
 class CommandInstallTest(TempState):
-    """Slash commands and the skill go in with the hooks, carry an absolute
-    launcher path so they never depend on PATH, and come out again without
-    touching anything we did not write."""
+    """The skill goes in with the hooks and comes out again without touching
+    anything we did not write."""
 
     def _home(self):
         home = os.path.join(self.tmp, "claude-cmd")
         os.makedirs(home, exist_ok=True)
         return home
-
-    def test_commands_are_written_with_an_absolute_launcher(self):
-        from xsm import install
-        home = self._home()
-        written = install.install_commands(home)
-        self.assertTrue(written)
-        body = open(os.path.join(home, "commands", "xsm-list.md")).read()
-        self.assertIn(install.launcher(), body)
-        self.assertNotIn("{{XSM}}", body)
-        self.assertIn(install.FILE_MARKER, body)
 
     def test_the_skill_is_linked_and_unlinked(self):
         from xsm import install
@@ -1259,52 +1265,6 @@ class CommandInstallTest(TempState):
         self.assertEqual(install.install_skill(home)[0], "linked")      # idempotent
         self.assertTrue(install.remove_skill(home))
         self.assertFalse(os.path.exists(link))
-
-    def test_a_foreign_command_of_the_same_name_survives(self):
-        from xsm import install
-        home = self._home()
-        os.makedirs(os.path.join(home, "commands"), exist_ok=True)
-        target = os.path.join(home, "commands", "xsm-list.md")
-        open(target, "w").write("---\ndescription: mine\n---\nkeep me\n")
-        install.install_commands(home)
-        self.assertEqual(open(target).read(), "---\ndescription: mine\n---\nkeep me\n")
-        install.remove_commands(home)
-        self.assertTrue(os.path.exists(target))
-
-    def test_codex_gets_each_command_as_a_skill_it_never_calls_itself(self):
-        """Codex has no slash commands; `$xsm` worked and `$xsm-list` did not
-        exist (2026-09-22). Each command becomes a skill of the same name."""
-        from xsm import install
-        home = os.path.join(self.tmp, "codex-cmd")
-        written = install.install_codex_commands(home)
-        self.assertEqual(sorted(os.path.basename(w) for w in written),
-                         sorted(os.path.basename(f)[:-3] for f in install.command_files()))
-        skill = open(os.path.join(home, "skills", "xsm-list", "SKILL.md")).read()
-        self.assertIn("name: xsm-list\n", skill)
-        self.assertIn(install.launcher() + " list --table", skill,
-                      "Codex does not run !`cmd`; the model is told to")
-        self.assertNotIn("!`", skill)
-        self.assertIn("not in a code block", skill, "a table is left for the TUI to draw")
-        self.assertNotIn("{{XSM}}", skill)
-        policy = open(os.path.join(home, "skills", "xsm-list", "agents", "openai.yaml")).read()
-        self.assertIn("allow_implicit_invocation: false", policy)
-        send = open(os.path.join(home, "skills", "xsm-send", "SKILL.md")).read()
-        self.assertIn("$xsm-send", send)
-        self.assertNotIn("$ARGUMENTS", send)
-        self.assertIn("xsm_send", send, "the sandbox route is spelled out")
-        self.assertEqual(install.remove_codex_commands(home), len(written))
-        self.assertFalse(os.path.exists(os.path.join(home, "skills", "xsm-list")))
-
-    def test_a_foreign_codex_skill_of_the_same_name_survives(self):
-        from xsm import install
-        home = os.path.join(self.tmp, "codex-cmd")
-        mine = os.path.join(home, "skills", "xsm-list")
-        os.makedirs(mine)
-        open(os.path.join(mine, "SKILL.md"), "w").write("---\nname: xsm-list\n---\nmine\n")
-        install.install_codex_commands(home)
-        install.remove_codex_commands(home)
-        self.assertEqual(open(os.path.join(mine, "SKILL.md")).read(),
-                         "---\nname: xsm-list\n---\nmine\n")
 
     def test_a_foreign_skill_directory_is_left_alone(self):
         from xsm import install
@@ -1468,27 +1428,28 @@ class CompactOutputTest(TempState):
         self.assertIn("one\\|two", out.getvalue(), "a pipe in a name does not split a cell")
 
     def test_every_display_command_asks_for_a_table_its_output_provides(self):
-        """/xsm-list, /xsm-who, /xsm-log, /xsm-projects, /xsm-doctor all pass
-        Markdown tables through for the TUI to draw."""
-        import re
+        """/xsm list, who, log, projects and doctor all pass Markdown tables
+        through for the TUI to draw."""
         from unittest import mock
         from xsm import cli, ledger, registry
         home = os.path.join(self.tmp, "homes", "codex")
         os.makedirs(home, exist_ok=True)
         me = registry.upsert("codex", home, "t1", os.getpid(), self.tmp, name="me")
         ledger.queued("m1", me, me, "dir:x", "note", "a | b")
-        for name in ("xsm-list", "xsm-who", "xsm-log", "xsm-projects", "xsm-doctor"):
-            body = open(os.path.join(REPO, "commands", name + ".md")).read()
-            self.assertIn("not in a\ncode block", body, name)
-            for command in re.findall(r"!`\{\{XSM\}\} ([^`]*)`", body):
-                self.assertIn("--table", command, name)
+        skill = open(os.path.join(REPO, "skills", "xsm", "SKILL.md")).read()
+        commands = ["%s --table" % c for c in ("list", "who", "projects", "doctor")] + \
+            ["ledger --table --mine --last 5", "held list --table"]
+        for command in commands:
+            with self.subTest(command=command):
+                if command.startswith(("ledger", "held")):
+                    self.assertIn("xsm " + command, skill)
                 out = io.StringIO()
                 with contextlib.redirect_stdout(out), \
                         mock.patch.object(registry, "me", lambda: me):
                     cli.main(command.split())
                 text = out.getvalue()
                 self.assertTrue(text.startswith("| ") or text.startswith("no ")
-                                or text.startswith("nothing"), (name, text[:80]))
+                                or text.startswith("nothing"), (command, text[:80]))
                 self.assertNotIn("```", text)
         self.assertIn("a \\| b", _run_cli(["ledger", "--table"]), "a pipe stays inside its cell")
 
@@ -1509,8 +1470,6 @@ class CompactOutputTest(TempState):
         self.assertEqual(len(rows), 1, "only this session's messages")
         self.assertIn(" | you → xxxxxxxx", rows[0])
         self.assertLess(max(len(line) for line in text.splitlines()), 90)
-        skill, _ = install.codex_command_skill(os.path.join(REPO, "commands", "xsm-log.md"))
-        self.assertNotIn("<<<", skill, "Codex copied the markers into its reply")
 
     def test_list_compact_groups_by_folder_this_one_first(self):
         """A path on every line wrapped each entry in a narrow Codex pane."""
@@ -1597,11 +1556,11 @@ class SupersededSessionTest(TempState):
         self.assertTrue(self._ledger_line().startswith("undelivered a->b m1"))
 
     def test_display_commands_ask_for_a_verbatim_copy(self):
-        """The prompts must not contain conditions for the model to weigh."""
-        for name in ("xsm-list", "xsm-who", "xsm-log", "xsm-doctor"):
-            body = open(os.path.join(REPO, "commands", name + ".md")).read()
-            self.assertIn("copied exactly", body, name)
-            self.assertNotIn("unless", body, name)
+        """The prompt must not contain conditions for the model to weigh."""
+        skill = open(os.path.join(REPO, "skills", "xsm", "SKILL.md")).read()
+        display = skill.split("**Display commands**", 1)[1].split("**`send", 1)[0]
+        self.assertIn("copied exactly", display)
+        self.assertNotIn("unless", display)
 
 
 class SelfIdentityTest(TempState):
