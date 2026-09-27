@@ -34,9 +34,11 @@ python3 -m xsm uninstall --claude-home ~/.claude-3
 ## 세션 안에서 (`/xsm <명령>`)
 
 설치가 홈에 스킬 `xsm` 하나를 넣는다. 세션에서는 명령을 인자로 넘겨 부른다. Claude Code는 `/xsm list`,
-Codex는 `$xsm list`다. 플러그인 스킬의 정식 이름은 `/xsm:xsm`이고, 문서상 frontmatter `name: xsm`이 있으면
-다른 `xsm`이 없는 한 bare `/xsm`으로도 불린다(플러그인 홈에서의 실물 확인은 아직 못 했다). 같은 이름의
-개인 스킬이 있으면 그쪽이 이기므로 그때는 `/xsm:xsm list`로 부른다.
+Codex는 `$xsm list`다. 플러그인 스킬의 정식 이름은 `/xsm:xsm`이고, 다른 `xsm`이 없으면 bare `/xsm`으로도
+불린다. 2026-09-27 새 플러그인 홈(0.4.0, Claude Code 2.1.283, manual mode)에서 확인했다. `/xsm list`를 치면
+기록에는 `/xsm:xsm list`로 남고, `xsm list --table` 한 번을 권한 창 없이 실행해 표를 보인다. 자동완성
+목록에는 `/xsm:xsm (xsm)`으로 뜬다. 같은 이름의 개인 스킬이 있으면 그쪽이 이기므로 그때는
+`/xsm:xsm list`로 부른다.
 
 | 명령 | 하는 일 |
 |---|---|
