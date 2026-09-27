@@ -147,12 +147,19 @@ Claude 쪽 입력은 명령마다 약 67~70k토큰이지만 대부분 캐시이�
 샌드박스에서 Codex로 보낼 때의 MCP 경로, 아직 프롬프트가 없는 Codex 스레드.
 
 ```bash
-git archive HEAD | tar -x -C /tmp/xsm-clean && cp -R evals /tmp/xsm-clean/
-cd /tmp/xsm-clean && claude plugin eval . --runs 1 --model haiku --judge-model haiku --trust-plugin
+rm -rf /tmp/xsm-clean && mkdir -p /tmp/xsm-clean && git archive HEAD | tar -x -C /tmp/xsm-clean
+cd /tmp/xsm-clean && env -i HOME="$HOME" PATH="$PATH" USER="$USER" TERM=xterm-256color LANG=en_US.UTF-8 \
+    CLAUDE_CONFIG_DIR=<로그인된 Claude 홈> claude plugin eval . --trust-plugin -j 4 --runs 4
 ```
 
 깨끗한 사본에서 돌리는 이유: eval은 폴더 전체를 플러그인으로 싣는데, 작업 중인 저장소에는 git이 무시하는
-파일(`.omc/`의 하드 링크 등)이 있고 eval은 하드 링크가 있으면 케이스를 거부한다.
+파일(`.omc/`의 하드 링크 등)이 있고 eval은 하드 링크가 있으면 케이스를 거부한다. `evals/`는 `export-ignore`가
+아니므로 `git archive`에 들어 있다.
+
+`env -i`로 띄우는 이유: Claude 세션 안에서 그대로 돌리면 그 세션의 환경(`CLAUDE_CODE_SESSION_ID`, 게이트웨이용
+`ANTHROPIC_BASE_URL` 등)이 eval의 실행으로 새어 들어간다. 반대로 그 변수들만 지우면 인증이 없어
+`Not logged in`으로 멈춘다(2026-09-27). 환경을 비우고 로그인된 홈을 `CLAUDE_CONFIG_DIR`로 준다. 실행 2회로는
+잡음이 크다. 같은 케이스가 0.00과 0.50을 오갔으므로, 전후를 비교할 때는 `--runs 4` 이상으로 돌린다.
 
 실측 2026-09-23. **haiku는 스킬 본문을 열지 않았다**(모든 실행에서 `tools=[]`). 그러니 작은 모델에게는
 설명문이 곧 제품 전체다. 처음에는 `/xsm send <session-id> <message>`라는 없는 문법을 지어냈고(세 케이스
@@ -164,6 +171,12 @@ cd /tmp/xsm-clean && claude plugin eval . --runs 1 --model haiku --judge-model h
 `no prompt yet ... after its first prompt`를 모델이 "네가 프롬프트를 보내면 된다"로 읽었는데, 그것이야말로
 할 수 없는 일이다. 문구를 "nobody has typed in yet ... once its own user types there or runs /rename,
 and until then it cannot be messaged"로 바꾸자 1.00이 됐다. 출력 문구도 인터페이스다.
+
+실측 2026-09-27(세션 모델, 케이스당 4회). 스킬을 `/xsm <명령>` 디스패치 표와 `references/guide.md`로 나눈 뒤
+`sandboxed-send-to-codex`가 0.75에서 0.00으로 떨어졌다. 설명문이 "Read references/guide.md"라고 적자 모델이
+스킬을 불러오지 않고 그 파일을 Glob으로 찾다가 거부당했고, 설명문만으로 "평소 터미널에서 다시 보내라"고
+답했다. 설명문을 "이 스킬을 불러와라(거절을 받았을 때도)"로 바꾸고 샌드박스 거절 대응을 SKILL.md 본문에
+두자 세 케이스 모두 1.00이 됐다(플러그인 없이는 `codex-thread-without-a-prompt`만 1.00). 설명문에 경로를 적으면 모델은 그 경로를 연다.
 
 ### 플러그인을 고칠 때 알아야 할 것 (실측 2026-09-23)
 
