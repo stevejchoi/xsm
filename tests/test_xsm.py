@@ -629,7 +629,7 @@ class InstallRefreshTest(TempState):
         with open(target, "a") as fh:
             fh.write("\nstale line\n")
         self.assertEqual(sorted(os.path.basename(p) for p in install.stale_copies(home)),
-                         ["SKILL.md", "xsm-list.md"])
+                         ["xsm", "xsm-list.md"])
         self.assertEqual(install.install_skill(home, refresh=True)[0], "copy-current")
         install.install_commands(home)
         self.assertEqual(install.stale_copies(home), [])
@@ -1317,18 +1317,35 @@ class CommandInstallTest(TempState):
 
     def test_a_copy_is_reported_as_current_or_stale(self):
         """Following an older instruction left people with a copied SKILL.md;
-        install has to say when that copy has fallen behind."""
+        install has to say when that copy has fallen behind. The copy is the
+        whole directory now: a SKILL.md without references/guide.md points the
+        model at a file that is not there."""
+        from xsm import install
+        home = self._home()
+        skill_dir = os.path.join(home, "skills", "xsm")
+        shutil.copytree(os.path.join(install.REPO, "skills", "xsm"), skill_dir)
+        self.assertEqual(install.skill_state(home)[0], "copy-current")
+        guide = os.path.join(skill_dir, "references", "guide.md")
+        open(guide, "a").write("\nstale line\n")
+        state, detail = install.skill_state(home)
+        self.assertEqual(state, "copy-stale")
+        self.assertEqual(detail, skill_dir)
+
+    def test_refresh_brings_a_skill_md_only_copy_up_to_date(self):
+        """~/.claude-4 and ~/.codex-3 held SKILL.md alone; refresh has to add
+        references/ rather than call the copy current."""
         from xsm import install
         home = self._home()
         skill_dir = os.path.join(home, "skills", "xsm")
         os.makedirs(skill_dir)
-        ours = os.path.join(install.REPO, "skills", "xsm", "SKILL.md")
-        shutil.copy2(ours, os.path.join(skill_dir, "SKILL.md"))
+        shutil.copy2(os.path.join(install.REPO, "skills", "xsm", "SKILL.md"),
+                     os.path.join(skill_dir, "SKILL.md"))
+        self.assertEqual(install.skill_state(home)[0], "copy-stale")
+        self.assertEqual(install.install_skill(home, refresh=True)[0], "copy-current")
+        self.assertTrue(os.path.isfile(os.path.join(skill_dir, "references", "guide.md")))
         self.assertEqual(install.skill_state(home)[0], "copy-current")
-        open(os.path.join(skill_dir, "SKILL.md"), "a").write("\nstale line\n")
-        state, detail = install.skill_state(home)
-        self.assertEqual(state, "copy-stale")
-        self.assertTrue(detail.endswith("SKILL.md"))
+        self.assertTrue(install.remove_skill(home))
+        self.assertFalse(os.path.exists(skill_dir))
 
     def test_a_link_nested_inside_the_directory_is_reported(self):
         """`ln -sfn repo/skills/xsm <home>/skills/xsm` puts the link *inside* an
@@ -2023,3 +2040,47 @@ class OutcomeTest(TempState):
             scope="repo:x", kind="note"))
         self.assertNotIn("--outcome", envelope.sender_context(note),
                          "a note closes nothing; the command it offers stays as it was")
+
+
+class SkillLayoutTest(unittest.TestCase):
+    """One skill takes the commands as arguments: `/xsm list` in Claude Code,
+    `$xsm list` in Codex (2026-09-27). Codex has no slash commands of its own,
+    and eight command skills beside `xsm` were eight skills that were not."""
+
+    def setUp(self):
+        from xsm import install
+        self.dir = os.path.join(install.REPO, "skills", "xsm")
+        self.skill = open(os.path.join(self.dir, "SKILL.md"), encoding="utf-8").read()
+
+    def test_display_commands_run_with_table_and_are_copied_bare(self):
+        for command in ("list", "who", "projects", "doctor"):
+            self.assertIn("`%s`" % command, self.skill)
+        self.assertIn("xsm <command> --table", self.skill)
+        self.assertIn("xsm ledger --table --mine --last 5", self.skill)
+        self.assertIn("xsm held list --table", self.skill)
+        self.assertIn("copied exactly", self.skill)
+        self.assertIn("not in a code block", self.skill)
+
+    def test_no_wording_left_from_the_preexecuted_commands(self):
+        """Those bodies said "do not call any tool" and wrapped the output in
+        <<< >>>: without `!` pre-execution the model then runs nothing, or
+        copies the markers (2026-09-23)."""
+        self.assertNotIn("do not call any tool", self.skill)
+        self.assertNotIn("<<<", self.skill)
+        self.assertNotIn("!`", self.skill)
+        self.assertNotIn("/xsm-", self.skill)
+
+    def test_read_only_commands_are_the_only_ones_pre_approved(self):
+        head = self.skill.split("\n---\n", 1)[0]
+        self.assertIn("name: xsm\n", head)
+        allowed = [line for line in head.splitlines() if line.startswith("allowed-tools:")][0]
+        self.assertNotIn("send", allowed)
+        for command in ("list", "who", "ledger", "held", "projects", "doctor"):
+            self.assertIn("Bash(xsm %s:*)" % command, allowed)
+
+    def test_the_guide_lives_under_references(self):
+        guide = os.path.join(self.dir, "references", "guide.md")
+        self.assertTrue(os.path.isfile(guide))
+        self.assertIn("references/guide.md", self.skill)
+        self.assertNotIn("/xsm-", open(guide, encoding="utf-8").read())
+        self.assertLess(len(self.skill.splitlines()), 90, "the reference text belongs in the guide")

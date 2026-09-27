@@ -694,10 +694,7 @@ def cmd_install(args) -> int:
             notes = {
                 "linked": "linked to the repo",
                 "copy-current": "a copy is in place and matches the repo",
-                "copy-stale": "a copy has fallen behind; refresh it with\n"
-                              "           cp %s %s" % (
-                                  os.path.join(install.REPO, "skills", "xsm", "SKILL.md"),
-                                  detail),
+                "copy-stale": "a copy has fallen behind; refresh it with `xsm install --refresh`",
                 "nested-link": "a link sits inside the existing directory (%s);\n"
                                "           remove it: rm %s" % (detail, detail),
                 "foreign": "something else is at skills/xsm; left alone",

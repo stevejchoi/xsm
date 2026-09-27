@@ -366,12 +366,28 @@ def stale_copies(home: str, runtime: str = "claude") -> list:
     return out
 
 
+def _skill_tree() -> dict:
+    """{path relative to skills/xsm: text} for every file the skill ships.
+    SKILL.md alone is not the skill any more: it points at references/, and a
+    copy without them sends the model to a file that is not there."""
+    source = os.path.join(REPO, "skills", "xsm")
+    out = {}
+    for root, dirs, files in os.walk(source):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for name in files:
+            if name.startswith("."):
+                continue
+            full = os.path.join(root, name)
+            out[os.path.relpath(full, source)] = _read_text(full)
+    return out
+
+
 def skill_state(home: str) -> tuple:
     """(state, detail) for the skill in this home.
 
     linked        our symlink, in step with the repo
-    copy-current  a copied SKILL.md identical to ours
-    copy-stale    a copied SKILL.md that has fallen behind
+    copy-current  a copied skill directory whose files all match ours
+    copy-stale    a copied skill directory that has fallen behind
     nested-link   a link made *inside* an existing directory (ln -sfn into a dir)
     foreign       something else lives there; we leave it alone
     absent        nothing there yet
@@ -386,14 +402,12 @@ def skill_state(home: str) -> tuple:
     nested = os.path.join(target, "xsm")
     if os.path.islink(nested) and os.path.realpath(nested) == os.path.realpath(source):
         return "nested-link", nested
-    copied = os.path.join(target, "SKILL.md")
-    ours = os.path.join(source, "SKILL.md")
-    if os.path.isfile(copied):
-        try:
-            same = open(copied, encoding="utf-8").read() == open(ours, encoding="utf-8").read()
-        except OSError:
-            same = False
-        return ("copy-current" if same else "copy-stale"), copied
+    if os.path.isfile(os.path.join(target, "SKILL.md")):
+        # Files the copy has and we do not are left out of the comparison: they
+        # are not ours to judge, and counting them would keep it stale forever.
+        same = all(_read_text(os.path.join(target, rel)) == text
+                   for rel, text in _skill_tree().items())
+        return ("copy-current" if same else "copy-stale"), target
     return "foreign", target
 
 
@@ -401,13 +415,17 @@ def install_skill(home: str, refresh: bool = False) -> tuple:
     """Link the skill so the session knows the commands exist. A link keeps it in
     step with the repo; anything already there that is not ours is left be.
 
-    With `refresh`, a copy that has fallen behind is rewritten: it is our file,
-    and telling a person to run `cp` is how two profiles ended up eight
-    versions behind (2026-09-23)."""
+    With `refresh`, a copy that has fallen behind is rewritten, every file of
+    it: it is ours, and telling a person to run `cp` is how two profiles ended
+    up eight versions behind (2026-09-23)."""
     state, detail = skill_state(home)
     if state == "copy-stale" and refresh:
-        with open(detail, "w", encoding="utf-8") as fh:
-            fh.write(open(os.path.join(REPO, "skills", "xsm", "SKILL.md"), encoding="utf-8").read())
+        for rel, text in _skill_tree().items():
+            target = os.path.join(detail, rel)
+            if _read_text(target) != text:
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with open(target, "w", encoding="utf-8") as fh:
+                    fh.write(text)
         return "copy-current", detail
     if state != "absent":
         return state, detail
@@ -565,7 +583,7 @@ def remove_skill(home: str) -> bool:
     # take our link). Its first line is ours, so it is not someone else's file.
     state, detail = skill_state(home)
     if state in ("copy-current", "copy-stale") and \
-            (_read_text(detail) or "").startswith("---\nname: xsm\n"):
+            (_read_text(os.path.join(detail, "SKILL.md")) or "").startswith("---\nname: xsm\n"):
         shutil.rmtree(target, ignore_errors=True)
         return True
     return False
