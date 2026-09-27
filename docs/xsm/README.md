@@ -35,6 +35,18 @@ python3 -m xsm uninstall --claude-home ~/.claude-3
 
 설치가 홈에 명령 파일을 넣는다. 세션에서 그대로 쓴다.
 
+**명령의 원본은 `commands/*.md` 하나다.** `{{XSM}}`은 설치 시점에 치환되는 자리표시자라 저장소에는
+그대로 남고, 설치 방식에 따라 갈라진다.
+
+| 설치 | 치환 | 결과 명령 |
+|---|---|---|
+| 직접 (`xsm install`) | `{{XSM}}` → 절대 경로 | 홈의 `commands/`에 쓰고, `/xsm-list` |
+| 플러그인 (`/plugin install`) | `{{XSM}}` → `xsm` (PATH에 있음) | `.claude-plugin/commands/`에 미리 만들어 두고, `/xsm:list` (이름 앞의 `xsm-`은 플러그인이 네임스페이스로 붙임) |
+
+`.claude-plugin/commands/`는 `plugin_command_files()`가 `commands/`에서 파생시킨 것이다. 이 변환은
+저장소에 이미 만들어 둔 상태로 있고, 설치 시점에 일어나는 게 아니라 `commands/`를 고치면 함께
+고쳐야 한다 — `xsm install`이 자동으로 동기화하지 않는다.
+
 Codex에는 슬래시 명령이 없어서, 설치는 같은 명령을 이름이 같은 스킬(`skills/xsm-list/` 등)로 넣는다.
 Codex에서는 `/xsm-list` 대신 `$xsm-list`로 부른다. Claude의 `!`명령`` 선실행이 Codex에는 없으므로
 스킬 본문은 모델에게 명령을 실행해 출력을 그대로 옮기라고 지시한다. 모델이 스스로 부르지 않도록
