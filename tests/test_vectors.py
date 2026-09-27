@@ -176,6 +176,10 @@ def _gate_case(case):
         records = self.records_by_session(case["sessions"])
         receiver = records[case["receiver"]]
         message = case["message"]
+        for w in case.get("workers", []):
+            from xsm import workers
+            workers.save({"name": w["name"], "ref": records[w["session"]]["ref"],
+                          "parent_ref": records[w["parent"]]["ref"]})
 
         if message["kind"] == "raw":
             prompt = message.get("prompt", "")

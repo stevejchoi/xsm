@@ -119,7 +119,27 @@ def scope_for(a: dict, b: dict, cfg: dict | None = None):
     scope, reason = _scope_for(a, b, cfg)
     if scope:
         return scope, reason
+    link = _worker_link(a, b)
+    if link:
+        return link, "a worker and the session that started it"
     return None, reason + _half_joined(a, b, cfg)
+
+
+def _worker_link(a: dict, b: dict) -> str | None:
+    """A worker and the session that spawned it may always talk. A worker in a
+    folder outside its parent's scope exists only because a person allowed it
+    (an outside_scope grant, or the spawn ran at their terminal), yet the task
+    and every reply used to be refused by this very check, so the worker came
+    up and never heard a word (2026-09-28). The link covers that pair only:
+    the worker and the other sessions of its folder follow the usual rules."""
+    refs = {a.get("ref"), b.get("ref")}
+    if None in refs or len(refs) != 2:
+        return None
+    from . import workers           # lazy: workers imports this module
+    for w in workers.all_workers():
+        if {w.get("ref"), w.get("parent_ref")} == refs:
+            return "worker:%s" % w.get("name")
+    return None
 
 
 def _half_joined(a: dict, b: dict, cfg: dict) -> str:

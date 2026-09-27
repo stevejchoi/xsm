@@ -607,6 +607,83 @@
    }
   },
   {
+   "id": "worker-outside-scope-hears-its-parent",
+   "why": "A person allowed the worker into a folder outside its parent's scope; its task comes from the parent and must not be refused as out of scope.",
+   "sessions": [
+    {
+     "name": "parent",
+     "alias": "claude-3",
+     "session_id": "s1",
+     "cwd": "{tmp}/far"
+    },
+    {
+     "name": "helper",
+     "alias": "claude-4",
+     "session_id": "r1",
+     "cwd": "{tmp}/ws"
+    }
+   ],
+   "workers": [
+    {
+     "name": "helper",
+     "session": "r1",
+     "parent": "s1"
+    }
+   ],
+   "receiver": "r1",
+   "message": {
+    "kind": "xsm",
+    "kind_field": "task",
+    "from": "s1",
+    "body": "do this"
+   },
+   "expect": {
+    "output": "allow",
+    "context_contains": [
+     "parent@claude-3"
+    ],
+    "decision": "pass"
+   }
+  },
+  {
+   "id": "parent-hears-its-worker-outside-scope",
+   "why": "The worker's reply goes back the same way.",
+   "sessions": [
+    {
+     "name": "parent",
+     "alias": "claude-3",
+     "session_id": "s1",
+     "cwd": "{tmp}/far"
+    },
+    {
+     "name": "helper",
+     "alias": "claude-4",
+     "session_id": "r1",
+     "cwd": "{tmp}/ws"
+    }
+   ],
+   "workers": [
+    {
+     "name": "helper",
+     "session": "r1",
+     "parent": "s1"
+    }
+   ],
+   "receiver": "s1",
+   "message": {
+    "kind": "xsm",
+    "from": "r1",
+    "body": "done"
+   },
+   "expect": {
+    "output": "allow",
+    "context_contains": [
+     "helper@claude-4"
+    ],
+    "decision": "pass"
+   }
+  },
+  {
    "id": "scope-changed-after-sending-is-refused",
    "why": "The scope travels in the header, so a policy edited between send and receive is a visible failure, not a silent pass.",
    "sessions": [

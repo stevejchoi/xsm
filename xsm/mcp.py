@@ -338,7 +338,8 @@ class Server:
         words = {"remote": "PAIRING with another machine over SSH: sessions there in the paired "
                            "project can message this project",
                  "outside_scope": "a folder OUTSIDE this session's project: the worker will be "
-                                  "able to talk to the sessions there",
+                                  "able to talk to the sessions there (and to this session, "
+                                  "which starts it)",
                  "full_access": "FULL ACCESS: no sandbox and no approval prompts",
                  "trust_hooks": "hooks run WITHOUT Codex's trust review, including any in that "
                                 "folder"}

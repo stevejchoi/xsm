@@ -110,6 +110,25 @@ class ScopeTest(TempState):
                                        {"runtime": "codex", "cwd": os.path.join(self.tmp, "b")}]}]})
         self.assertEqual(config.scope_for(a, b)[0], "pair")
 
+    def test_a_worker_outside_the_parents_scope_talks_to_its_parent_only(self):
+        from xsm import config, workers
+        parent = {"cwd": os.path.join(self.tmp, "a"), "runtime": "claude", "ref": "p1"}
+        worker = {"cwd": os.path.join(self.tmp, "b"), "runtime": "codex", "ref": "w1"}
+        neighbour = {"cwd": os.path.join(self.tmp, "b"), "runtime": "claude", "ref": "n1"}
+        self.assertIsNone(config.scope_for(parent, worker)[0])
+        workers.save({"name": "helper", "ref": "w1", "parent_ref": "p1"})
+        self.assertEqual(config.scope_for(parent, worker)[0], "worker:helper")
+        self.assertEqual(config.scope_for(worker, parent)[0], "worker:helper")
+        self.assertIsNone(config.scope_for(parent, neighbour)[0])
+        self.assertIsNotNone(config.scope_for(worker, neighbour)[0])   # same folder, as before
+
+    def test_no_worker_link_without_refs(self):
+        from xsm import config, workers
+        workers.save({"name": "early", "ref": None, "parent_ref": None})
+        a = {"cwd": os.path.join(self.tmp, "a"), "runtime": "claude"}
+        b = {"cwd": os.path.join(self.tmp, "b"), "runtime": "claude"}
+        self.assertIsNone(config.scope_for(a, b)[0])
+
 
 class RecordedSocketTest(TempState):
     """The inbox socket comes from CLAUDE_CODE_MESSAGING_SOCKET, which Claude Code
