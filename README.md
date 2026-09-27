@@ -57,7 +57,7 @@ Claude Code와 Codex 에이전트 세션들이 서로를 인식하고 메시지�
 **Claude Code: 플러그인** (권장). 저장소 자체가 마켓플레이스입니다.
 
 ```
-/plugin marketplace add jaesolshin/cross-session-messaging
+/plugin marketplace add ysys143/cross-session-messaging
 /plugin install xsm@xsm
 ```
 
