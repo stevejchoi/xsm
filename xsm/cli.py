@@ -634,6 +634,15 @@ def cmd_install(args) -> int:
         # wrote there are copies, and a copy eight versions behind is what a
         # second profile quietly ran for a day (2026-09-23).
         targets = [(h["path"], h["runtime"]) for h in config.homes()]
+        # A home its user deleted stays in the list; writing into it would
+        # bring back a profile they threw away (2026-09-27).
+        for home, runtime in list(targets):
+            if not os.path.isdir(home):
+                print("%s: gone; skipped (forget it with `xsm homes remove %s`)"
+                      % (_home_tilde(home), home))
+                targets.remove((home, runtime))
+        if not targets and config.homes():
+            return OK
         if not targets:
             print("nothing installed yet; name a home: --claude-home ~/.claude", file=sys.stderr)
             return USAGE

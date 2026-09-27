@@ -588,6 +588,19 @@ class RetiredCommandTest(TempState):
         self.assertFalse(os.path.exists(old))
         self.assertIn("xsm-who.md", out.getvalue())
 
+    def test_refresh_does_not_bring_back_a_home_its_user_deleted(self):
+        """Two profiles moved to the trash came back two minutes later as empty
+        homes with hooks in them (2026-09-27)."""
+        from xsm import cli, config
+        home = os.path.join(self.tmp, "deleted-home")
+        config.add_home(home, "claude")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli.main(["install", "--refresh"])
+        self.assertEqual(code, 0)
+        self.assertFalse(os.path.exists(home))
+        self.assertIn("gone; skipped", out.getvalue())
+
 
 class WorkerPolicyTest(TempState):
     """The rule was widened three times in one day, each time after a worker
