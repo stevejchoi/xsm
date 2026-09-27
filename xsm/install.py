@@ -558,6 +558,10 @@ def doctor() -> dict:
     version = sys.version_info
     decisions = paths.read_jsonl("decisions.jsonl", limit=200)
     errors = [d for d in decisions if "internal error" in (d.get("reason") or "")]
+    # A deleted home stays in the list until forgotten; reporting what it
+    # would need installed invites bringing it back.
+    homes = [h for h in config.homes() if os.path.isdir(h["path"])]
+    gone = [h["path"] for h in config.homes() if not os.path.isdir(h["path"])]
     report = {
         "xsm_home": paths.HOME,
         "interpreter": pinned_python(),
@@ -565,9 +569,10 @@ def doctor() -> dict:
         "interpreter_ok": version >= (3, 9),
         "codex_binary": adapters.codex_bin(),
         "codex_binaries": codex_versions(),
-        "homes": config.homes(),
-        "installs": [plan(h["path"], h["runtime"]) for h in config.homes()],
-        "codex_trust": {h["path"]: codex_trust(h["path"], approvals=True) for h in config.homes()
+        "homes": homes,
+        "gone": gone,
+        "installs": [plan(h["path"], h["runtime"]) for h in homes],
+        "codex_trust": {h["path"]: codex_trust(h["path"], approvals=True) for h in homes
                         if h.get("runtime") == "codex"},
         "sessions": {"registered": len(registry.records()),
                      "live": len([r for r in registry.records() if r["state"] == "live"]),
@@ -577,13 +582,13 @@ def doctor() -> dict:
         "held": len(os.listdir(paths.path(paths.HELD))) if os.path.isdir(paths.path(paths.HELD)) else 0,
         "version": plugin_version(),
         "tmux": shutil.which("tmux"),
-        "plugins": {h["path"]: plugin_installed(h["path"]) for h in config.homes()
+        "plugins": {h["path"]: plugin_installed(h["path"]) for h in homes
                     if h.get("runtime") == "claude"},
         "stale": {h["path"]: stale_copies(h["path"], h.get("runtime") or "claude")
-                  for h in config.homes()},
-        "leftovers": {h["path"]: leftovers(h["path"]) for h in config.homes()
+                  for h in homes},
+        "leftovers": {h["path"]: leftovers(h["path"]) for h in homes
                       if h.get("runtime") == "claude"},
-        "retired": {h["path"]: retired_commands(h["path"]) for h in config.homes()},
+        "retired": {h["path"]: retired_commands(h["path"]) for h in homes},
         "xsm_on_path": shutil.which("xsm"),
         "stuck": stuck(),
         "limits": [

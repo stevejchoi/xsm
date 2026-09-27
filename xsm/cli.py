@@ -791,6 +791,8 @@ def cmd_doctor(args) -> int:
             continue
         states = ", ".join("%s:%s" % (a["event"], a["action"]) for a in plan["actions"])
         print("install    %-45s %s" % (plan["file"], states))
+    for home in report.get("gone") or []:
+        print("gone       %s: deleted; forget it with `xsm homes remove %s`" % (_home_tilde(home), home))
     for home, trust in (report.get("codex_trust") or {}).items():
         if not trust:
             print("codex      %s: xsm hooks not installed" % home)

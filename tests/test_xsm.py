@@ -600,6 +600,10 @@ class RetiredCommandTest(TempState):
         self.assertEqual(code, 0)
         self.assertFalse(os.path.exists(home))
         self.assertIn("gone; skipped", out.getvalue())
+        from xsm import install
+        report = install.doctor()
+        self.assertEqual(report["gone"], [os.path.realpath(home)])
+        self.assertEqual(report["installs"], [])
 
 
 class WorkerPolicyTest(TempState):
