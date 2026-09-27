@@ -1658,6 +1658,35 @@ class SelfIdentityTest(TempState):
         os.environ["CODEX_THREAD_ID"] = "t-one"
         self.assertEqual(registry.me()["session_id"], "t-one")
 
+    def test_a_codex_carrying_a_claude_sessions_id_still_finds_itself(self):
+        """A Codex started from a shell a Claude session made (a tmux server
+        first opened there) carries that Claude's session id too, and took the
+        Claude session for itself (2026-09-27)."""
+        from xsm import identity, registry
+        for var in ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"):
+            self.addCleanup(lambda k=var, v=os.environ.get(var):
+                            os.environ.__setitem__(k, v) if v is not None
+                            else os.environ.pop(k, None))
+        chome = os.path.join(self.tmp, "homes", "claude")
+        xhome = os.path.join(self.tmp, "homes", "codex")
+        os.makedirs(chome)
+        os.makedirs(xhome)
+        registry.upsert("claude", chome, "s-claude", 1111, self.tmp, name="builder")
+        registry.upsert("codex", xhome, "t-codex", 2222, self.tmp, name="reviewer")
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "s-claude"
+        os.environ["CODEX_THREAD_ID"] = "t-codex"
+        walk = identity.ancestor_pid
+        self.addCleanup(setattr, identity, "ancestor_pid", walk)
+
+        identity.ancestor_pid = lambda names, max_hops=10: None      # the Codex sandbox
+        self.assertEqual(registry.me()["session_id"], "t-codex")
+        identity.ancestor_pid = lambda names, max_hops=10: 2222      # nearest agent is Codex
+        self.assertEqual(registry.me()["session_id"], "t-codex")
+        identity.ancestor_pid = lambda names, max_hops=10: 1111      # a Claude run under that Codex
+        self.assertEqual(registry.me()["session_id"], "s-claude")
+        # A hook names its session outright; that is not an inherited guess.
+        self.assertEqual(registry._me("s-claude", None)[0]["session_id"], "s-claude")
+
     def test_a_sandbox_that_forbids_signals_and_ps_still_sees_live_peers(self):
         """From inside the Codex sandbox kill(pid, 0) answers EPERM and `ps`
         cannot run. Both were read as "dead", so `xsm list` there showed no one

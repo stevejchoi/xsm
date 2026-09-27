@@ -509,6 +509,21 @@ def _me(session_id: str | None, cwd: str | None) -> tuple:
     per rule that could have matched and did not."""
     rows = records()
     own_session = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    thread = os.environ.get("CODEX_THREAD_ID")
+    # Each runtime sets its own id in the shells it runs, but leaves the other's
+    # alone: a Codex started from a shell a Claude session made (a tmux server
+    # first opened there, say) still carries that Claude's id, and took that
+    # session for itself (2026-09-27). With both set, the nearer agent process
+    # decides; where the walk cannot run, that is the Codex sandbox.
+    if not session_id and own_session and thread:
+        claude = next((r for r in rows if r.get("session_id") == own_session), None)
+        codex = next((r for r in rows if r.get("runtime") == "codex"
+                      and r.get("session_id") == thread), None)
+        if claude and codex and claude is not codex:
+            own = identity.ancestor_pid({"claude", "codex"})
+            if own and claude.get("pid") == own:
+                return claude, "ancestor"
+            return codex, "ancestor" if own and codex.get("pid") == own else "codex_thread_id"
     session_id = session_id or own_session
     if session_id:
         for rec in rows:
@@ -519,7 +534,6 @@ def _me(session_id: str | None, cwd: str | None) -> tuple:
     # the Codex sandbox refuses to run `ps` ("operation not permitted",
     # measured 2026-09-22), so inside it the walk always fails, and two
     # sandboxed sessions sharing a folder could not tell which one they were.
-    thread = os.environ.get("CODEX_THREAD_ID")
     if thread:
         for rec in rows:
             if rec.get("runtime") == "codex" and rec.get("session_id") == thread:
