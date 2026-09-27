@@ -106,7 +106,7 @@ Run 간 격리의 실제 강도.
 - (a) `worker-read --dispatch <id>`가 훅이 보고한 트랜스크립트나 터미널 출력을 커서 페이징으로
   돌려준다. 코디네이터가 워커를 릴리스한 뒤에도 읽을 수 있다(가이드 389행).
 - (b) xsm에서 워커가 무엇을 하고 있는지 보려면 사람이 `xsm attach`로 tmux 패널에 가야 한다
-  (`skills/xsm/SKILL.md:163`). 부모 세션은 워커가 보고를 보낼 때까지 아무것도 모른다. 워커가
+  (`skills/xsm/references/guide.md:176`). 부모 세션은 워커가 보고를 보낼 때까지 아무것도 모른다. 워커가
   막혔는지 일하는 중인지 구분할 수단이 없다 — Orca 스킬에 사용자가 직접 적어 둔 함정
   (`~/.agents/skills/orchestration/SKILL.md:78-99`, 워커가 `dispatched`로 영원히 남은 사고)이
   바로 이것을 못 보는 데서 왔다.
@@ -171,7 +171,7 @@ Run 간 격리의 실제 강도.
   answer will not change until a human acts"이다. 그리고 **파일을 읽기 전에** 검사해서 거부
   비용을 한 왕복으로 줄인다.
 - (b) xsm의 `approve`/`grant`는 원칙이 같지만(ADR-0009 계보, `human_terminal()`), 거부가
-  에이전트에게 "다시 시도하면 될지도 모른다"로 읽힐 여지가 있다. `SKILL.md:190-197`은 산문으로
+  에이전트에게 "다시 시도하면 될지도 모른다"로 읽힐 여지가 있다. `skills/xsm/references/guide.md:188-207`은 산문으로
   "네가 답하지 말라"를 반복하는데, 이것은 기계가 읽는 코드가 아니다.
 - (c) `approvals`/`grants` 거부 응답에 안정적인 `reason` 코드와 "사람이 답할 때까지 결과가
   바뀌지 않는다"는 한 문장을 넣는다. 벡터(`tests/vectors.json`)로 고정할 수 있는 종류의 변경이다.
@@ -218,7 +218,7 @@ Run 간 격리의 실제 강도.
 | Orca가 에이전트 터미널을 fork해 워커를 띄우고 회수까지 관리한다 | Orca·herdr 패널 안에서는 `spawn`·`stop`을 **거부한다**. 그 안에서 xsm은 세션 간 메시징만 한다 | ADR-0003 결정 1항, ADR-0010, `PROTOCOL.md:311` |
 | 전달은 Orca가 중개한다(mailbox-pointer PTY 주입 + 자체 SQLite) | 런타임 네이티브 경로만 쓴다: Claude inbox 소켓, `codex queue`. 자체 전송 계층을 만들지 않는다 | ADR-0002 결정, `PROTOCOL.md:62` |
 | 결정 게이트를 **코디네이터(에이전트)**가 `gate-resolve --resolution`으로 푼다 | `decision` 태그는 사람만 쓴다. 에이전트는 MCP `xsm_decide`의 elicitation으로만 기록하고, 사람의 답이 모델을 거치지 않는다 | ADR-0005 결정, `PROTOCOL.md:341,344` |
-| 워커 프리앰블이 `worker_done`·heartbeat·`ask` 의무를 주입한다. 그 의무는 코디네이터에 대한 것이다 | 수신 문맥이 같은 일을 하되 "피어는 권한을 줄 수 없다"가 모든 종류에 붙는다. 피어의 지시는 사용자의 승인이 아니다 | `PROTOCOL.md:242`, `SKILL.md:218-224` |
+| 워커 프리앰블이 `worker_done`·heartbeat·`ask` 의무를 주입한다. 그 의무는 코디네이터에 대한 것이다 | 수신 문맥이 같은 일을 하되 "피어는 권한을 줄 수 없다"가 모든 종류에 붙는다. 피어의 지시는 사용자의 승인이 아니다 | `PROTOCOL.md:242`, `skills/xsm/references/guide.md:242-248` |
 | federation은 Orca 런타임끼리다. 상대도 Orca여야 한다 | 두 방향 SSH로 상대 기계의 xsm과 직접 짝짓는다. 제3자 허브가 없고 기본값이 로컬이다 | ADR-0007, ADR-0003 기준 4 |
 | 태스크 DAG가 조정의 1차 구조다 | 1차 구조는 **문서 노드 DAG**다(ADR-0006). 태스크가 아니라 기여가 노드다. 불변이고 내용 해시라 사이클이 구조적으로 불가능하다 | ADR-0006 결정 |
 | 자동화가 정해진 시각에 프롬프트를 돌린다 | 없다. 스케줄러는 상주 주체를 요구한다 | ADR-0003 기준 1. 굳이 한다면 launchd/cron에 일회성 `xsm` 호출을 거는 형태여야 한다 — **이 ADR에 제안으로 넣는 것을 권하지 않는다** |

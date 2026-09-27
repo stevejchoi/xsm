@@ -1,5 +1,5 @@
 # What a release archive leaves behind. The plugin needs xsm/, hooks/, bin/,
-# commands/, skills/ and .claude-plugin/; everything below is how the project
+# skills/ and .claude-plugin/; everything below is how the project
 # is developed and argued about, not how it runs. `git archive` (and any
 # archive-sourced install) drops them; a git clone still has them.
 tests/          export-ignore

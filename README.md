@@ -19,7 +19,7 @@ Claude Code와 Codex 에이전트 세션들이 서로를 인식하고 메시지�
 ## 구조
 
 ```
-├── .claude-plugin/               # 플러그인·마켓플레이스 매니페스트, 플러그인용 명령 사본
+├── .claude-plugin/               # 플러그인·마켓플레이스 매니페스트
 ├── hooks/hooks.json, .mcp.json   # 플러그인이 제공하는 훅과 MCP 서버
 ├── bin/xsm                       # 런처 (PYTHONPATH 설정 후 python3 -m xsm)
 ├── xsm/                          # 구현 전체 (Python, stdlib만)
@@ -37,7 +37,7 @@ Claude Code와 Codex 에이전트 세션들이 서로를 인식하고 메시지�
 │   ├── install.py               # 훅 설치·진단
 │   └── mcp.py                   # MCP 서버
 ├── hooks/                        # 런타임이 부르는 훅 진입점
-├── commands/                     # 슬래시 명령
+├── skills/xsm/                   # 스킬 하나: `/xsm <명령>`(Codex `$xsm <명령>`)과 참고 문서
 ├── docs/
 │   ├── adr/                     # 아키텍처 결정 기록 (0001–0012)
 │   ├── xsm/                     # 프로토콜·테스트 계획
@@ -61,17 +61,23 @@ Claude Code와 Codex 에이전트 세션들이 서로를 인식하고 메시지�
 /plugin install xsm@xsm
 ```
 
-훅·명령·스킬·MCP 서버·`bin/`이 함께 들어오고, `plugin.json`의 `version`이 오를 때 갱신됩니다.
-명령은 `/xsm:list`, `/xsm:who`처럼 플러그인 이름이 앞에 붙습니다. 플러그인을 끄면 훅도 함께 꺼집니다.
+훅·스킬·MCP 서버·`bin/`이 함께 들어오고, `plugin.json`의 `version`이 오를 때 갱신됩니다.
+세션 안에서는 `/xsm list`, `/xsm who`처럼 부릅니다(같은 이름의 개인 스킬이 있으면 `/xsm:xsm list`). 플러그인을 끄면 훅도 함께 꺼집니다.
 
 **Codex, 그리고 플러그인을 쓰지 않는 Claude 홈: `xsm install`.**
 
 ```bash
-bin/xsm install --codex-home ~/.codex          # Codex 훅·스킬·MCP
-bin/xsm install --claude-home ~/.claude-2      # 플러그인 대신 직접 설치할 때
-bin/xsm install --refresh                      # 이미 설치한 모든 홈을 최신으로
-bin/xsm doctor                                 # 설치 상태, 낡은 사본, 지금 막힌 것
+bin/xsm install --claude-home <my-claude-config-dir>          # 플러그인 대신 직접 설치할 때
+bin/xsm install --claude-home <dir-A> --claude-home <dir-B>   # 여러 홈을 한 명령으로
+bin/xsm install --codex-home <my-codex-home>                  # Codex 훅·스킬·MCP
+bin/xsm install --refresh                                     # 이미 설치한 모든 홈을 최신으로
+bin/xsm doctor                                                # 설치 상태, 낡은 사본, 지금 막힌 것
 ```
+
+`--claude-home`에는 Claude Code의 설정 디렉터리(`CLAUDE_CONFIG_DIR`)를, `--codex-home`에는 Codex의
+설정 디렉터리(`CODEX_HOME`)를 넣습니다. 따로 바꾸지 않았다면 각각 `~/.claude`, `~/.codex`입니다. 기본 홈은
+없으므로 `--refresh`가 아니면 홈을 하나 이상 적어야 합니다. 홈을 여러 개 쓴다면 `--claude-home`을 반복해 한
+명령으로 묶습니다.
 
 한 Claude 홈에 플러그인과 직접 설치가 같이 있으면 훅이 두 번 돌아 위험합니다. `xsm install`은 그런 홈을
 거부합니다(`--force`로 넘길 수 있음). 직접 설치한 사본은 저장소가 바뀌어도 자동으로 따라가지 않으므로,
@@ -90,6 +96,18 @@ bin/xsm doctor                                 # 설치 상태, 낡은 사본, �
 xsm who                              # 이 세션이 누구로 보이는지
 xsm list                             # 이 프로젝트에서 말을 걸 수 있는 세션들
 ```
+
+세션 안에서는 같은 명령을 스킬 `xsm`에 인자로 넘깁니다. Claude Code는 `/xsm`, Codex는 `$xsm`입니다.
+
+```
+/xsm list                            # Claude Code
+$xsm list                            # Codex
+/xsm send ref:a1b2c3 이것 좀 봐줘      # 대상 다음은 모두 메시지
+```
+
+명령은 `list`, `who`, `log`, `projects`, `doctor`, `send`, `join`, `leave`입니다. 인자 없이 부르면
+사용법 한 줄이 나옵니다. 말로 부탁하면("저쪽 세션에 물어봐") 에이전트가 같은 스킬의 참고 문서를 읽고
+직접 `xsm`을 실행합니다.
 
 ### 통신 범위
 

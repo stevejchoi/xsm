@@ -157,27 +157,27 @@ diff ~/.claude-4/settings.json.xsm-backup-* ~/.claude-4/settings.json
 grep -n '#xsm-hook' ~/.claude-4/settings.json
 ```
 
-### 2.2 스킬과 슬래시 명령
+### 2.2 스킬 `xsm`
 
 `install`이 훅과 함께 넣는다. 따로 복사할 것이 없다.
 
-- `<홈>/commands/xsm-*.md` — 세션에서 바로 쓰는 명령 `/xsm-list`, `/xsm-who`, `/xsm-log`, `/xsm-doctor`, `/xsm-send`. 파일에는 저장소의 `bin/xsm` 절대 경로가 박히므로 PATH에 의존하지 않는다.
-- `<홈>/skills/xsm` — 저장소의 스킬로 가는 심볼릭 링크. 에이전트가 주소 문법과 결과 읽는 법을 알게 된다.
+- `<홈>/skills/xsm` — 저장소의 스킬로 가는 심볼릭 링크. 사람이 직접 만든 복사본이 있으면 `--refresh`가 디렉터리째 갱신하고 `uninstall`이 지운다. 세션에서 `/xsm list`, `/xsm who`, `/xsm log`, `/xsm doctor`, `/xsm send <대상> <내용>`처럼 인자를 넘겨 부른다. 에이전트가 말로 된 부탁을 받으면 같은 스킬의 `references/guide.md`를 읽고 주소 문법과 결과 읽는 법을 따른다.
+- 옛 버전이 넣은 `<홈>/commands/xsm-*.md`(Codex는 `<홈>/skills/xsm-*/`)는 xsm 표시가 있는 것만 지운다.
 
-같은 이름의 파일이 이미 있으면 건드리지 않고 건너뛴다. 훅만 넣고 싶으면 `--no-commands`를 준다.
+같은 이름의 파일이 이미 있으면 건드리지 않고 건너뛴다. 훅만 넣고 싶으면 `--no-commands`를 준다(스킬을 넣지 않는다).
 
 확인:
 
 ```bash
-ls ~/.claude-4/commands/xsm-*.md ~/.claude-5/commands/xsm-*.md
-ls -l ~/.claude-4/skills/xsm
+ls -l ~/.claude-4/skills/xsm ~/.claude-5/skills/xsm
+ls ~/.claude-4/commands/xsm-*.md ~/.claude-5/commands/xsm-*.md   # 없어야 한다
 ```
 
-모델을 부르지 않고 보려면 `--statusline`을 더해 설치하거나(상태줄에 상대 수가 늘 보인다), 세션 입력창에서 `! xsm list`처럼 셸 모드로 실행한다. 슬래시 명령은 편하지만 모델 턴이 한 번 든다.
+모델을 부르지 않고 보려면 `--statusline`을 더해 설치하거나(상태줄에 상대 수가 늘 보인다), 세션 입력창에서 `! xsm list`처럼 셸 모드로 실행한다. `/xsm list`는 편하지만 모델 턴이 한 번 들고, 그 안에서 셸 호출도 한 번 한다.
 
-명령을 쓰려면 세션을 다시 띄워야 한다(3장). 세션 안에서 `/xsm-list`를 입력하면 등록된 세션 목록이 나온다.
+스킬을 쓰려면 세션을 다시 띄워야 한다(3장). 세션 안에서 `/xsm list`를 입력하면 등록된 세션 목록이 표로 나온다. 인자 없이 `/xsm`만 입력하면 사용법 한 줄이 나온다.
 
-**`--setting-sources`를 주면 명령이 로드되지 않는다.** 명령 파일은 홈(사용자 설정 범위)에 있으므로, `--setting-sources project,local`처럼 사용자 범위를 뺀 세션에서는 `/xsm-who`가 "Unknown command"로 뜬다(2026-09-21 확인). 이 테스트에서는 그 옵션을 쓰지 않는다.
+**`--setting-sources`를 주면 스킬이 로드되지 않는다.** 스킬은 홈(사용자 설정 범위)에 있으므로, `--setting-sources project,local`처럼 사용자 범위를 뺀 세션에서는 `/xsm`이 "Unknown command"로 뜬다(명령 파일 시절 2026-09-21 확인, 같은 범위 규칙). 이 테스트에서는 그 옵션을 쓰지 않는다.
 
 사람이 터미널에서 직접 쓰려면 실행 파일을 PATH에 둔다. 선택 사항이다.
 
@@ -238,8 +238,8 @@ cd $XSM_REPO && xsm list --dir /tmp/xsm-trial
 
 | # | 항목 | 지시 | 기대 |
 |---|---|---|---|
-| 4-1 | 자기 확인 | A에서 `/xsm-who` | `builder@claude-4 [ref] claude …` |
-| 4-2 | 상대 찾기 | A에서 `/xsm-list` | `reviewer@claude-5`가 `live`로 보임 |
+| 4-1 | 자기 확인 | A에서 `/xsm who` | `builder@claude-4 [ref] claude …` |
+| 4-2 | 상대 찾기 | A에서 `/xsm list` | `reviewer@claude-5`가 `live`로 보임 |
 | 4-3 | 첫 메시지 | A에게: `reviewer에게 "핑, 받으면 ACK만 답해"를 xsm send로 보내고 결과를 알려줘` | A: `delivered`, B 화면에 `[xsm]` 발신 표시와 함께 메시지 도착 |
 | 4-4 | 답장 | B에게: `방금 받은 메시지에 xsm send --reply-to로 답장해` | A 화면에 답장 도착 |
 | 4-5 | 전달 기록 | 관찰 터미널: `xsm ledger` | 두 메시지가 `delivered` |
@@ -343,13 +343,13 @@ xsm held show <목록에 나온 id>      # 전체 기록. show다, how가 아니
 
 모든 세션은 시작한 디렉터리의 프로젝트에 **기본으로 속한다**. git 저장소 안이면 `repo:<저장소 이름>`, 아니면 `dir:<폴더 이름>`이다. 이름 붙인 프로젝트는 여기에 **추가로** 가입하는 것이고, 기본 프로젝트를 대신하지 않는다. 가입 단위는 폴더(저장소 루트)라서, 같은 저장소의 세션과 그 하위 폴더에서 연 세션도 함께 들어간다.
 
-0. **기본 프로젝트를 확인한다.** A 세션에 `/xsm-projects`. 기대: `this folder (/private/tmp/xsm-trial) is in: repo:xsm-trial (default)`와 "no named projects".
-1. **A에서만 가입한다.** A 세션에 `/xsm-join trial`. 기대: `joined project trial: /private/tmp/xsm-trial`, `this folder is in: repo:xsm-trial (default), trial`, "no other project has joined trial yet".
-2. **한쪽만 가입한 상태로 보낸다.** A에서 `/xsm-send <C의 이름> 한쪽만 가입`. 기대: `refused: out of scope: …; /private/tmp/xsm-outside has not joined project trial (run /xsm-join trial there)`. 한 저장소가 다른 저장소를 끌어들일 수 없다는 확인이다.
-3. **C도 가입한다.** C 세션에 `/xsm-join trial`. 기대: `this folder is in: dir:xsm-outside (default), trial`, 그리고 "sessions in the other projects you can now reach"에 A와 B가 보인다.
+0. **기본 프로젝트를 확인한다.** A 세션에 `/xsm projects`. 기대: `this folder (/private/tmp/xsm-trial) is in: repo:xsm-trial (default)`와 "no named projects".
+1. **A에서만 가입한다.** A 세션에 `/xsm join trial`. 기대: `joined project trial: /private/tmp/xsm-trial`, `this folder is in: repo:xsm-trial (default), trial`, "no other project has joined trial yet".
+2. **한쪽만 가입한 상태로 보낸다.** A에서 `/xsm send <C의 이름> 한쪽만 가입`. 기대: `refused: out of scope: …; /private/tmp/xsm-outside has not joined project trial (run /xsm join trial there)`. 한 저장소가 다른 저장소를 끌어들일 수 없다는 확인이다.
+3. **C도 가입한다.** C 세션에 `/xsm join trial`. 기대: `this folder is in: dir:xsm-outside (default), trial`, 그리고 "sessions in the other projects you can now reach"에 A와 B가 보인다.
 4. **저장소를 넘어 보낸다.** A에게: `<C의 이름>에게 xsm send --kind task로 "네 작업 폴더 경로를 알려줘"를 보내고 결과를 알려줘`. 기대: A는 `delivered`, C 화면의 헤더에 `scope="trial"`, C가 따로 지시하지 않아도 답장한다. B에서 C로 보내도 `trial`로 전달된다.
-5. **같은 저장소는 기본 프로젝트 그대로다.** A에서 `/xsm-send reviewer 가입 후 같은 저장소`. 기대: `delivered`이고 헤더와 원장의 scope가 `trial`이 아니라 `repo:xsm-trial`이다. 관찰 터미널에서 `xsm ledger --json`으로 확인할 수 있다.
-6. **탈퇴한다.** C에서 `/xsm-leave trial`, 이어서 A에서 2번을 다시 하면 `refused`로 돌아오고 같은 안내가 붙는다. A→B는 탈퇴와 관계없이 계속 `repo:xsm-trial`로 전달된다. 끝으로 A에서도 `/xsm-leave trial`로 정리하고 `/xsm-projects`가 0번과 같은지 본다.
+5. **같은 저장소는 기본 프로젝트 그대로다.** A에서 `/xsm send reviewer 가입 후 같은 저장소`. 기대: `delivered`이고 헤더와 원장의 scope가 `trial`이 아니라 `repo:xsm-trial`이다. 관찰 터미널에서 `xsm ledger --json`으로 확인할 수 있다.
+6. **탈퇴한다.** C에서 `/xsm leave trial`, 이어서 A에서 2번을 다시 하면 `refused`로 돌아오고 같은 안내가 붙는다. A→B는 탈퇴와 관계없이 계속 `repo:xsm-trial`로 전달된다. 끝으로 A에서도 `/xsm leave trial`로 정리하고 `/xsm projects`가 0번과 같은지 본다.
 
 가입 기록은 `~/.xsm/config.json`의 `scopes`에 `{"root": …}`로 남는다. 탈퇴할 때까지 유지되고 시간이 지나도 만료되지 않는다. 손으로 쓴 범위와 이름이 같으면 가입이 거부된다. 이름 붙인 프로젝트 이름에는 `:`를 쓸 수 없어서 기본 프로젝트 이름과 겹치지 않는다.
 
@@ -417,7 +417,7 @@ Claude 세션 A(`builder`)와 Codex 세션 X를 같은 저장소에 두고 주�
 | 진행 중인 턴 | 끼어든다(다음 입력으로 쌓임) | 끼어들지 않는다. 지금 턴이 끝난 뒤 전달된다 |
 | 등록 시점 | 세션 시작 | 스레드가 생길 때. 프롬프트나 `/rename`으로 스레드가 생기면, 훅이 돌기 전이라도 xsm이 대신 등록한다 |
 | 종료 표시 | `ended` 또는 `stale` | 항상 `stale`(SessionEnd 이벤트가 없다) |
-| 슬래시 명령 | `/xsm-*` | 없음. 셸에서 `xsm`을 실행한다 |
+| 세션 안에서 | `/xsm <명령>` | `$xsm <명령>` (사용자 정의 슬래시 명령이 없다) |
 
 Codex 턴은 사용량 한도에 잡힌다. 이 장 전체에서 Codex 턴은 6~8회쯤 쓴다.
 
@@ -491,14 +491,14 @@ refused: cx-reviewer@codex is open but has not registered with xsm: the xsm hook
 
 | # | 항목 | 지시 | 기대 |
 |---|---|---|---|
-| 6-1 | Claude → Codex | A에서 `/xsm-send cx-reviewer@codex 핑, 받으면 ACK만 답해` | A: `sent-unconfirmed: queued; a Codex session picks the queue up within about 10 seconds …`. 10초쯤 뒤 X가 턴을 시작하고, 프롬프트 위에 `[xsm] This message came from another agent session (builder@claude-4 …)` 문맥이 붙는다 |
+| 6-1 | Claude → Codex | A에서 `/xsm send cx-reviewer@codex 핑, 받으면 ACK만 답해` | A: `sent-unconfirmed: queued; a Codex session picks the queue up within about 10 seconds …`. 10초쯤 뒤 X가 턴을 시작하고, 프롬프트 위에 `[xsm] This message came from another agent session (builder@claude-4 …)` 문맥이 붙는다 |
 | 6-2 | 전달 기록 | 관찰 터미널에서 `xsm ledger` | 6-1의 메시지가 `delivered`. Codex 쪽 훅이 영수증을 썼다는 뜻이다 |
 | 6-3 | Codex → Claude | X에게: `셸에서 xsm send builder@claude-4 --text "ACK from codex" --wait 20 을 실행하고 출력만 보여줘` | `delivered: receiver recorded it`. A 화면에 발신 표시와 함께 도착 |
-| 6-4 | 턴 경계 | X에게 긴 작업을 준다(예: `1부터 40까지 한 줄씩 세면서 각 줄에 짧은 설명을 붙여줘`). 도는 동안 A에서 `/xsm-send cx-reviewer@codex 중간 개입 시험` | X의 지금 턴은 끝까지 간다. 끝난 뒤 다음 턴으로 메시지가 들어온다. 이것이 설계다(ADR-0002, G3는 턴 경계 전달로 충족) |
-| 6-5 | 멈춘 Codex | X를 종료한다(`/quit`, 또는 Ctrl-C 두 번). A에서 `/xsm-send cx-reviewer@codex 정지 확인` | `refused: only stopped sessions match …`와 `resume it with: CODEX_HOME=… codex resume <id>`. 상태는 `stale`(Codex에는 종료 인사가 없다) |
+| 6-4 | 턴 경계 | X에게 긴 작업을 준다(예: `1부터 40까지 한 줄씩 세면서 각 줄에 짧은 설명을 붙여줘`). 도는 동안 A에서 `/xsm send cx-reviewer@codex 중간 개입 시험` | X의 지금 턴은 끝까지 간다. 끝난 뒤 다음 턴으로 메시지가 들어온다. 이것이 설계다(ADR-0002, G3는 턴 경계 전달로 충족) |
+| 6-5 | 멈춘 Codex | X를 종료한다(`/quit`, 또는 Ctrl-C 두 번). A에서 `/xsm send cx-reviewer@codex 정지 확인` | `refused: only stopped sessions match …`와 `resume it with: CODEX_HOME=… codex resume <id>`. 상태는 `stale`(Codex에는 종료 인사가 없다) |
 | 6-6 | 재개 | 안내된 명령으로 재개하고 프롬프트를 한 번 넣는다(재개 뒤 SessionStart가 다시 오는지는 확인되지 않았다. 프롬프트 때 훅이 다시 등록한다). A에서 다시 보낸다 | 다시 `live`. **ref가 그대로**다. 메시지가 도착한다 |
 
-`--wait`를 주지 않은 발신 결과는 항상 `sent-unconfirmed`다. Codex는 큐를 10초 단위로 읽으므로, 전달 여부는 조금 뒤 `xsm ledger`나 `/xsm-log`로 본다.
+`--wait`를 주지 않은 발신 결과는 항상 `sent-unconfirmed`다. Codex는 큐를 10초 단위로 읽으므로, 전달 여부는 조금 뒤 `xsm ledger`나 `/xsm log`로 본다.
 
 ### 6.4 협업: Codex를 검토자로
 
@@ -566,7 +566,6 @@ Codex에는 Claude처럼 "동료의 요청으로 다뤄라"는 자체 안내가 
 ```bash
 cd $XSM_REPO
 xsm uninstall --claude-home ~/.claude-4 --claude-home ~/.claude-5 --codex-home ~/.codex
-rm -rf ~/.claude-4/skills/xsm ~/.claude-5/skills/xsm     # 복사본이면. 링크는 uninstall이 지운다
 xsm list clear -a                  # 멈춘 세션 기록만 지운다(살아 있는 세션은 남는다)
 rm -rf ~/.xsm                      # 레지스트리·원장·보류 기록까지 지울 때만
 rm -rf /tmp/xsm-trial
