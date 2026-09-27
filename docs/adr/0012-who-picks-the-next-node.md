@@ -110,8 +110,8 @@ the effect on discovery per unit of compute requires a matched comparison." 저�
 
 ### 관련 ADR
 
-0003·0006·0010 Accepted. **0011 Proposed** — 구현(`telemetry.py`)은 있으나 미확정이며, 아래 S10이
-그 계측에 의존한다. 0006 미해결 행(`0006:88`) "통합자가 없는 경우. 워커가 아닌 피어끼리는 부모가
+0003·0006·0010·0011 Accepted(0011은 2026-09-23). 아래 S10이 0011의 계측(`telemetry.py`)에
+의존한다. 0006 미해결 행(`0006:88`) "통합자가 없는 경우. 워커가 아닌 피어끼리는 부모가
 없다". 0006 Round 4-1 제안 G는 claim을 **채널 레코드**로 두었다 — 이 ADR의 B1이 그것을 되살린다.
 
 ## 선택지

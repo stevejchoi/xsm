@@ -91,7 +91,7 @@ INTENT.md의 핵심 요구다. "게시판이 아니라 다른 세션에 직접 i
 
 | 방식 | 사례 | 근거 | 평가 |
 |---|---|---|---|
-| **네이티브 inbox** | Claude: `/tmp/cc-socks/<pid>.sock`에 JSON 줄을 쓰면 대화 큐에 들어간다 | `../list-agents-cross-session-messaging.md` 9~13절 (실측 포함) | 권한 경고, 보류 정책, rate limit이 적용된다. 비공개 프로토콜이다 |
+| **네이티브 inbox** | Claude: `/tmp/cc-socks/<pid>.sock`에 JSON 줄을 쓰면 대화 큐에 들어간다 | `../list-agents-cross-session-messaging.md` 9~13절 (실측 포함) | 권한 경고, 보류 정책, rate limit이 적용된다. 소켓 경로(`CLAUDE_CODE_MESSAGING_SOCKET`), auth 줄, 30초 제한, 수신 정책은 [공식 문서](https://code.claude.com/docs/en/cross-session-messaging#the-sessions-inbox-socket)에 있다(2026-09-27 확인). 메시지 프레임(`type`·`msg_id`·`priority`·`from`)과 다른 세션의 소켓을 찾는 레지스트리는 여전히 문서에 없다 |
 | **PTY 포인터 주입** | Orca: 에이전트가 idle일 때만 `You have N orchestration message. Run \`orca orchestration check\`.`를 입력하고, 본문은 에이전트가 CLI로 가져간다 | `orca/src/main/runtime/orchestration/formatter.ts:112-122`, `mailbox-pointer-delivery.ts:70-110` (코디네이터가 직접 확인) | 본문이 입력창을 거치지 않는다. idle 판정과 대기자 확인으로 사용자 입력과의 충돌을 줄인다 |
 | **PTY 전체 주입** | herdr: 프롬프트 텍스트 + Enter를 300ms 간격으로 PTY에 넣는다 | `herdr/src/app/api/agents.rs:130-215` | 어떤 CLI에든 적용된다. 사람 입력과 구분되지 않는다(권한 경고 없음). OS·에이전트별 입력 보정이 필요하다 |
 | **MCP poll** | moai: `session_msg_poll` 도구를 에이전트가 호출해야 받는다 | `moai-adk/internal/cli/mcp_server.go:458-480` | 공식 확장 지점이지만 idle 세션을 깨우지 못한다 |

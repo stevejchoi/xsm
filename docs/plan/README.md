@@ -190,7 +190,10 @@ G1~G8과 C1·C2는 INTENT.md에 있는 라벨이 아니다. 이 계획이 INTENT
 
 ## 7. 위험
 
-- **비공개 프로토콜 의존.** Claude inbox 프로토콜과 레지스트리 형식은 공개 API가 아니다. 버전마다 바뀔 수 있다. 확인된 변화 신호는 다음과 같다.
+- **비공개 프로토콜 의존.** Claude inbox 프로토콜과 레지스트리 형식은 공개 API가 아니다. 버전마다 바뀔 수 있다.
+  (2026-09-27 갱신: inbox 소켓의 경로·auth 줄·30초 제한·수신 정책은 이제
+  [공식 문서](https://code.claude.com/docs/en/cross-session-messaging#the-sessions-inbox-socket)에 있다. 남은 비공개
+  부분은 메시지 프레임 형식과 `sessions/<pid>.json` 레지스트리다.) 확인된 변화 신호는 다음과 같다.
   - `peerProtocol: 1` 필드
   - `tengu_session_stable_address` 플래그
   - 대응: `tools/find_evidence.py` 같은 버전별 검증 스크립트를 CI 성격의 점검으로 둔다.

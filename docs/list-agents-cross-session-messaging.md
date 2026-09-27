@@ -40,6 +40,7 @@ npx prettier --parser babel /tmp/bunfs/chunk-6kcckmy2.js   # 읽을 청크 정�
 - 레지스트리가 설정 디렉터리 아래에 있어서 **프로필(`CLAUDE_CONFIG_DIR`)이 다르면 서로 보이지 않는다**(실측).
 - macOS/Linux에서는 inbox 인증 토큰이 선택 사항이다. 보안 경계는 0700 디렉터리 안의 0600 소켓, 즉 같은 uid다. Windows에서만 토큰이 필수다.
 - 받은 메시지는 "Another Claude session sent a message:" 머리말과 권한 경고 꼬리말이 붙은 meta 사용자 메시지로 대화에 들어간다. 슬래시 커맨드는 실행되지 않는다.
+- **2026-09-27 추가: 이 기능의 상당 부분은 이제 공식 문서에 있다.** [Cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging)은 `/list-agents`, 수신 정책(`crossSessionInbound`, `isolatePeerMachines`), 다른 기계로의 전달(Remote Control 경유, Anthropic 서버를 거침), inbox 소켓을 설명한다. 소켓 절은 `CLAUDE_CODE_MESSAGING_SOCKET`·`CLAUDE_CODE_MESSAGING_TOKEN` 환경변수, 첫 줄 `{"type":"auth","token":"..."}`(macOS/Linux 선택, 네이티브 Windows 필수), 30초 안에 한 줄을 보내야 한다는 제한, 대체 디렉터리 `/tmp/cc-socks-<uid>`까지 적는다. 문서에 **없는** 것은 이 보고서가 바이너리로 확인한 메시지 프레임(`type: "user"`, `msg_id`, `priority`, `from`)과 레지스트리 `sessions/<pid>.json`, 그리고 프로필이 다르면 서로 보이지 않는다는 점이다. 아래 본문은 2.1.278 기준 그대로 둔다.
 - 기능 코드명은 `harbor_kite`다. 게이트는 환경변수 `CLAUDE_CODE_HARBOR_KITE`이고, 없으면 GrowthBook 플래그 `tengu_harbor_kite`(기본 true)를 따른다.
 
 ## 2. 관련 청크 위치

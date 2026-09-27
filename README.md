@@ -56,7 +56,8 @@ Most documents under `docs/` are written in Korean.
 
 ### Install
 
-The only dependency is the standard library. Installing means making each session run the hooks, and there
+Runs on macOS and Linux (it relies on Unix sockets, `ps`, `/dev/tty` and tmux); native Windows is not
+supported. The only dependency is the standard library. Installing means making each session run the hooks, and there
 are two ways to do it.
 
 **Claude Code: plugin** (recommended). The repository is its own marketplace.
