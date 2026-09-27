@@ -2051,8 +2051,16 @@ class SkillLayoutTest(unittest.TestCase):
         self.assertIn("name: xsm\n", head)
         allowed = [line for line in head.splitlines() if line.startswith("allowed-tools:")][0]
         self.assertNotIn("send", allowed)
-        for command in ("list", "who", "ledger", "held", "projects", "doctor"):
-            self.assertIn("Bash(xsm %s:*)" % command, allowed)
+        # Exact commands, not prefixes: `xsm held:*` would also approve
+        # `xsm held drop`, and `xsm list:*` would approve `xsm list clear`.
+        self.assertNotIn(":*", allowed)
+        for command in ("list --table", "who --table", "projects --table", "doctor --table",
+                        "ledger --table --mine --last 5", "held list --table"):
+            self.assertIn("Bash(xsm %s)" % command, allowed)
+        # The rules match only what the body tells the model to run.
+        body = self.skill.split("\n---\n", 1)[1]
+        for line in ("xsm <command> --table", "xsm ledger --table --mine --last 5", "xsm held list --table"):
+            self.assertIn(line, body)
 
     def test_the_guide_lives_under_references(self):
         guide = os.path.join(self.dir, "references", "guide.md")

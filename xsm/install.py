@@ -385,8 +385,9 @@ def remove_skill(home: str) -> bool:
     if os.path.islink(target) and os.path.realpath(target) == os.path.realpath(source):
         os.unlink(target)
         return True
-    # A copy we wrote (install_skill --refresh writes one where a home cannot
-    # take our link). Its first line is ours, so it is not someone else's file.
+    # A copy of our skill (made by hand where a link would not do; install_skill
+    # --refresh keeps it current). Its first line is ours, so it is not someone
+    # else's file.
     state, detail = skill_state(home)
     if state in ("copy-current", "copy-stale") and \
             (_read_text(os.path.join(detail, "SKILL.md")) or "").startswith("---\nname: xsm\n"):
