@@ -111,6 +111,48 @@ class ScopeTest(TempState):
         self.assertEqual(config.scope_for(a, b)[0], "pair")
 
 
+class RecordedSocketTest(TempState):
+    """The inbox socket comes from CLAUDE_CODE_MESSAGING_SOCKET, which Claude Code
+    documents and hands to hooks; its own sessions/<pid>.json is only a fallback."""
+
+    def _home(self, native):
+        from xsm import paths
+        home = os.path.join(self.tmp, "homes", "claude-3")
+        os.makedirs(os.path.join(home, "sessions"), exist_ok=True)
+        paths.write_json(os.path.join(home, "sessions", "%d.json" % os.getpid()), native)
+        return home
+
+    def test_recorded_socket_is_used_without_the_native_field(self):
+        from xsm import registry
+        home = self._home({"name": "solo", "sessionId": "s1"})
+        sock = "/tmp/cc-socks/%d.sock" % os.getpid()
+        registry.upsert("claude", home, "s1", os.getpid(), self.tmp, socket=sock)
+        self.assertEqual(registry.by_session("claude", "s1")["socket"], sock)
+
+    def test_native_field_still_covers_records_without_one(self):
+        from xsm import registry
+        home = self._home({"name": "solo", "sessionId": "s1",
+                           "messagingSocketPath": "/tmp/native.sock"})
+        registry.upsert("claude", home, "s1", os.getpid(), self.tmp)
+        self.assertEqual(registry.by_session("claude", "s1")["socket"], "/tmp/native.sock")
+
+    def test_a_socket_named_for_another_pid_is_not_kept(self):
+        from xsm import registry
+        home = self._home({"name": "solo", "sessionId": "s1"})
+        rec = registry.upsert("claude", home, "s1", os.getpid(), self.tmp,
+                              socket="/tmp/cc-socks/%d.sock" % (os.getpid() + 1))
+        self.assertNotIn("socket", rec)
+
+    def test_socket_survives_a_register_without_one_but_not_a_new_pid(self):
+        from xsm import registry
+        home = self._home({"name": "solo", "sessionId": "s1"})
+        sock = "/tmp/cc-socks/%d.sock" % os.getpid()
+        registry.upsert("claude", home, "s1", os.getpid(), self.tmp, socket=sock)
+        self.assertEqual(registry.upsert("claude", home, "s1", os.getpid(), self.tmp)["socket"], sock)
+        # claude --resume brings the same session id back under another pid
+        self.assertNotIn("socket", registry.upsert("claude", home, "s1", os.getpid() + 1, self.tmp))
+
+
 class ResolveTest(TempState):
     def _register(self, name, alias, session_id, state="live"):
         from xsm import paths, registry

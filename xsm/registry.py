@@ -26,9 +26,10 @@ def _record_path(runtime: str, session_id: str) -> str:
 
 def upsert(runtime: str, home: str, session_id: str, pid: int, cwd: str,
            permission_mode: str | None = None, name: str | None = None,
-           mcp_pid: int | None = None) -> dict:
+           mcp_pid: int | None = None, socket: str | None = None) -> dict:
     home = os.path.realpath(os.path.expanduser(home))
     record = paths.read_json(_record_path(runtime, session_id), {}) or {}
+    previous_pid = record.get("pid")
     record.update({
         "runtime": runtime,
         "home": home,
@@ -50,6 +51,15 @@ def upsert(runtime: str, home: str, session_id: str, pid: int, cwd: str,
         record["permission_mode"] = permission_mode
     if name:
         record["name"] = name
+    if runtime == "claude":
+        # The inbox socket as Claude Code exports it to hooks
+        # (CLAUDE_CODE_MESSAGING_SOCKET, documented), so sending does not have
+        # to find it in Claude's own undocumented sessions/<pid>.json. The file
+        # is named after the pid, so a path for another pid is not this one's.
+        if socket and identity.pid_from_socket(socket) == int(pid):
+            record["socket"] = socket
+        elif previous_pid != int(pid) or socket:
+            record.pop("socket", None)
     if runtime == "codex":
         # The xsm MCP server serving this thread, or none known (no beacon:
         # the MCP server is not installed in that home, or this is adoption).
@@ -109,7 +119,7 @@ def _enrich(record: dict) -> dict:
     if record.get("runtime") == "claude":
         native = _claude_native(record.get("home", ""), record.get("pid"))
         out["name"] = native["name"] or record.get("name") or "claude-%s" % record.get("pid")
-        out["socket"] = native["socket"]
+        out["socket"] = record.get("socket") or native["socket"]
         out["name_source"] = native["name_source"]
         out["native_session_id"] = native["native_session_id"]
     else:
@@ -333,7 +343,8 @@ def adopt_self() -> dict | None:
                    if str(d.get("sessionId")) == sid), None)
     if not native or not identity.pid_alive(native.get("pid")):
         return None
-    rec = upsert("claude", home, sid, native["pid"], native.get("cwd") or os.getcwd())
+    rec = upsert("claude", home, sid, native["pid"], native.get("cwd") or os.getcwd(),
+                 socket=os.environ.get("CLAUDE_CODE_MESSAGING_SOCKET"))
     rec["adopted"] = True
     paths.write_json(_record_path("claude", sid), rec)
     return by_session("claude", sid) or rec

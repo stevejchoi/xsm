@@ -105,7 +105,9 @@ def register(data: dict, runtime: str) -> dict | None:
     return registry.upsert(runtime, home, session_id, pid, session_folder(runtime, data),
                            permission_mode=data.get("permission_mode"),
                            name=data.get("session_title"),
-                           mcp_pid=registry.beacon_for(pid) if runtime == "codex" else None)
+                           mcp_pid=registry.beacon_for(pid) if runtime == "codex" else None,
+                           socket=os.environ.get("CLAUDE_CODE_MESSAGING_SOCKET")
+                           if runtime == "claude" else None)
 
 
 def _emit(runtime: str, payload: dict | None) -> None:
