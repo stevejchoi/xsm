@@ -173,44 +173,66 @@ Jaeger나 Grafana Tempo에서 "이 메시지가 어디서 멈췄는지"를 그�
   - [Communication Scope](docs/adr/0004-communication-scope.md)
   - [Remote Transport & Trust](docs/adr/0007-remote-transport-and-trust.md)
 - **[Protocol Spec](docs/xsm/)**: 메시지 프로토콜 명세
+- **[Test Protocol](docs/xsm/TESTPLAN.md)**: 실사용 점검 절차 (개발자용 테스트는 여기)
 - **[Agent Messaging Guide](docs/list-agents-cross-session-messaging.md)**: 에이전트 메시징 구현
+
+## 동작 방식
+
+xsm은 메시지를 한 세션의 입력으로 직접 넣습니다. 서버도, 상주 프로세스도 없습니다.
+
+```
+Claude Code Session A → xsm → Claude Code Session B     같은 머신
+Claude Code ↔ Codex                                     서로 다른 CONFIG_HOME 사이에서도
+Local Machine → SSH → Remote Server                     양쪽 다 xsm 설치 + `xsm remote add`
+```
+
+각 세션의 훅이 시작·프롬프트 시점에 자신을 등록하고(등록=동의), 발신은 각 런타임이 이미 가진
+수단(Claude 인박스 소켓, `codex queue`)으로만 합니다. 수신 측 훅이 게이트 역할을 해서 범위·발신자를
+확인한 뒤 세션의 프롬프트로 넣고, 거절된 메시지는 보관합니다.
 
 ## 사용 사례
 
-### 1. 로컬 세션 간 협업
-```
-Claude Code Session A → XSM → Claude Code Session B
+### 1. 세션 이름 짓고 찾기
+
+이름은 런타임이 가진 것입니다. `xsm rename` 같은 명령은 없습니다 — xsm은 이름을 조회할 때마다
+런타임 원본에서 읽으므로, 세션의 실제 이름을 바꾸면 xsm도 그걸 따라갑니다.
+
+```bash
+# Claude Code 세션에서
+/rename my-reviewer                            # 세션 이름 변경
+
+# 그 다음, 다른 세션에서
+xsm list                                       # 이 프로젝트에서 말 걸 수 있는 세션들
+xsm who                                        # 이 세션이 어떻게 보이는지
 ```
 
-### 2. 크로스 런타임 메시징
-```
-Claude Code ↔ Codex        (서로 다른 CONFIG_DIR 사이에서도)
+### 2. 다른 저장소 세션과 연결
+
+```bash
+xsm join my-project                            # 양쪽 저장소에서 각각
+xsm projects                                   # 어떤 폴더들이 묶였는지
 ```
 
-### 3. 원격 서버 메싱
-```
-Local Machine → SSH → Remote Server (양쪽 다 xsm 설치, xsm remote add 로 페어링)
+### 3. 메시지 보내고 답장 받기
+
+```bash
+xsm send my-reviewer --text "이것 좀 봐줘"     # 그냥 알림
+xsm send my-reviewer --text "이 테스트 고쳐줘" --kind task --wait 15   # 일 시키고 답장 기다림
+xsm ledger                                     # 전달 상태 확인
 ```
 
 ### 4. 워커에게 일 시키기
-```
-xsm spawn codex --task "이 테스트 고쳐줘"    # 띄우고, 지시하고, 결과를 답장으로 받음
-```
-
-## 테스트
 
 ```bash
-python3 -m unittest discover -s tests -v      # 전체 (임시 XSM_HOME 위에서 실행됨)
-python3 -m unittest tests.test_remote         # 두 머신 (가짜 ssh로 한 박스에서)
-
-XSM_NO_TELEMETRY=1 python3 -m unittest discover -s tests   # 계측을 꺼도 결과는 같아야 함
+xsm spawn codex --task "이 테스트 고쳐줘"      # 띄우고, 지시하고, 답장으로 결과를 받음
+xsm workers                                    # 워커 상태
 ```
 
-설치된 실제 환경을 점검하려면:
+### 5. 설치가 안 된 홈 진단
 
 ```bash
-xsm selftest                                  # 훅이 실제로 도는지
-xsm doctor                                    # 설치 상태, 보류 건수, 한도
+xsm doctor                                     # 어느 홈에 훅이 없는지, 낡은 사본, 지금 막힌 것
+xsm selftest                                   # 훅이 실제로 도는지
 ```
 
 ## 참고 자료
