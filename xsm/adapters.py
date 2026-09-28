@@ -4,7 +4,9 @@ Claude: one JSON frame per line into the session's own inbox socket. Codex:
 `codex queue --thread <uuid>`, which a running TUI picks up within about ten
 seconds when the thread is loaded and idle (S2). Both are the runtimes' own
 mechanisms — we add no transport of our own, so there is nothing of ours to
-keep running (ADR-0003).
+keep running (ADR-0003). Codex's queue skips a thread stopped with Esc, so
+after queueing we ask its app-server daemon to start the item (codex_daemon);
+a request Codex's own API offers; when it cannot be made the item just waits.
 
 A sandboxed Codex cannot use either path from its shell: the socket connect
 returns EPERM and the queue database is read-only (S4). We surface that as a
@@ -16,6 +18,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import shutil
 import socket
 import sqlite3
@@ -110,11 +113,54 @@ def _to_claude(socket_path: str, content: str, msg_id: str, priority: str,
         raise DeliveryError("socket-error", str(err))
 
 
+class Queued(str):
+    """What the queueing said, plus what asking the daemon to start it did:
+    `wake` is a codex_daemon outcome, or "skipped" when it was not asked."""
+    wake = "skipped"
+    wake_detail = ""
+
+
 def to_codex(codex_home: str, thread_id: str, content: str) -> str:
     """Always addressed by thread UUID: name lookup fails outright once a home
     holds more than a hundred threads (S7)."""
     with _timed("codex-queue"):
-        return _to_codex(codex_home, thread_id, content)
+        text = _to_codex(codex_home, thread_id, content) or ""
+    out = Queued(text)
+    out.wake, out.wake_detail = wake_codex(codex_home, thread_id, queued_id(text))
+    return out
+
+
+# `codex queue` prints "Queued message `<id>` for thread `<thread>`"
+# (codex-rs/tui/src/session_queue_commands.rs, 0.158); queue_direct says
+# "queued `<id>` directly".
+QUEUED_ID = re.compile(r"[Qq]ueued (?:message )?`([^`]+)`")
+
+
+def queued_id(text: str) -> str | None:
+    found = QUEUED_ID.search(text or "")
+    return found.group(1) if found else None
+
+
+def wake_off() -> bool:
+    if os.environ.get("XSM_NO_CODEX_WAKE", "") not in ("", "0"):
+        return True
+    try:
+        from . import config
+        return config.load().get("codex_wake", True) is False
+    except Exception:               # a broken config must not cost the delivery
+        return False
+
+
+def wake_codex(codex_home: str, thread_id: str, item: str | None) -> tuple:
+    """Ask the Codex daemon to start the item now (codex_daemon). The item is
+    queued either way; this only spares it waiting for the person to type
+    after an Esc (user decision, 2026-09-28; ADR-0002 appendix)."""
+    if not item:
+        return "skipped", "no queued item id"
+    if wake_off():
+        return "skipped", "turned off (codex_wake: false or XSM_NO_CODEX_WAKE)"
+    from . import codex_daemon
+    return codex_daemon.start_queued(codex_home, thread_id, item)
 
 
 def _to_codex(codex_home: str, thread_id: str, content: str) -> str:
@@ -185,6 +231,7 @@ def queue_direct(codex_home: str, thread_id: str, content: str) -> str:
             raise DeliveryError("codex-internal-changed",
                                 "queued_items has columns %s, expected %s" % (cols, QUEUE_COLUMNS))
         now = int(time.time() * 1000)
+        item = _uuid()
         payload = {"UserInput": {"content": [{"type": "text", "text": content,
                                               "text_elements": []}],
                                  "client_id": _uuid()}}
@@ -193,7 +240,7 @@ def queue_direct(codex_home: str, thread_id: str, content: str) -> str:
                                 "where thread_id = ?", (thread_id,)).fetchone()[0]
             con.execute("insert into queued_items (id, thread_id, payload_json, queue_order, "
                         "created_at_ms, updated_at_ms) values (?, ?, ?, ?, ?, ?)",
-                        (_uuid(), thread_id, json.dumps(payload, ensure_ascii=False), order,
+                        (item, thread_id, json.dumps(payload, ensure_ascii=False), order,
                          now, now))
     except sqlite3.OperationalError as err:
         blocked = "readonly" in str(err) or "not permitted" in str(err)
@@ -202,7 +249,7 @@ def queue_direct(codex_home: str, thread_id: str, content: str) -> str:
         raise DeliveryError("codex-failed", str(err))
     finally:
         con.close()
-    return "queued directly (the thread has had no prompt yet)"
+    return "queued `%s` directly (the thread has had no prompt yet)" % item
 
 
 def thread_of_process(codex_home: str, pid: int, since: float) -> str | None:

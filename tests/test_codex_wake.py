@@ -1,0 +1,350 @@
+"""Waking a Codex thread stopped with Esc through its app-server daemon.
+
+Every daemon here is a fake: a Unix socket in a temporary folder, linked from
+a temporary CODEX_HOME the way Codex links its real one. XSM_HOME is a
+temporary folder too; no real Codex home, daemon or session is touched.
+"""
+import base64
+import contextlib
+import io
+import json
+import os
+import shutil
+import socket
+import struct
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from unittest import mock
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO)
+
+BUSY = "thread already has an active or pending turn"
+NOT_LOADED = "resume the thread before starting a queued message"
+
+
+class FakeDaemon:
+    """Speaks WebSocket + JSON-RPC like Codex's control socket, as `mode` says:
+    started, busy, not-loaded, garbage (not WebSocket), silent (never replies),
+    chatty (a ping and a notification before each reply)."""
+
+    def __init__(self, codex_home, mode):
+        self.mode, self.requests = mode, []
+        self.dir = tempfile.mkdtemp(prefix="xd", dir="/tmp")    # AF_UNIX paths are short
+        real = os.path.join(self.dir, "c.sock")
+        self.sock = socket.socket(socket.AF_UNIX)
+        self.sock.bind(real)
+        self.sock.listen(4)
+        link = os.path.join(codex_home, "app-server-control", "app-server-control.sock")
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        os.symlink(real, link)
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.sock.close()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _loop(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            try:
+                self._serve(conn)
+            except (OSError, ValueError, struct.error):
+                pass
+            finally:
+                conn.close()
+
+    def _serve(self, conn):
+        conn.settimeout(10)
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = conn.recv(4096)
+            if not chunk:
+                return
+            buf += chunk
+        if self.mode == "garbage":
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nno")
+            return
+        conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                     b"Connection: Upgrade\r\nSec-WebSocket-Accept: x\r\n\r\n")
+        rest = buf.split(b"\r\n\r\n", 1)[1]
+        while True:
+            msg, rest = self._read(conn, rest)
+            if msg is None:
+                return
+            self.requests.append(msg)
+            if self.mode == "silent" or "id" not in msg:
+                continue
+            if self.mode == "chatty":
+                conn.sendall(self._frame(b"hi", opcode=0x9))
+                conn.sendall(self._frame(json.dumps({"method": "thread/status/changed",
+                                                     "params": {}}).encode()))
+            conn.sendall(self._frame(json.dumps(self._reply(msg)).encode()))
+
+    def _reply(self, msg):
+        rid = msg["id"]
+        if msg["method"] == "initialize":
+            return {"id": rid, "result": {"userAgent": "fake"}}
+        if msg["method"] != "thread/queue/start":
+            return {"id": rid, "error": {"code": -32601, "message": "not here"}}
+        if self.mode == "busy":
+            return {"id": rid, "error": {"code": -32600, "message": BUSY}}
+        if self.mode == "not-loaded":
+            return {"id": rid, "error": {"code": -32600, "message": NOT_LOADED}}
+        return {"id": rid, "result": {"turn": {"id": "turn-1", "status": "inProgress",
+                                                "items": []}}}
+
+    @staticmethod
+    def _frame(data, opcode=0x1):
+        n = len(data)
+        head = bytes([0x80 | opcode]) + (bytes([n]) if n < 126 else
+                                         bytes([126]) + struct.pack(">H", n))
+        return head + data
+
+    @staticmethod
+    def _read(conn, buf):
+        def need(n):
+            nonlocal buf
+            while len(buf) < n:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    raise OSError("closed")
+                buf += chunk
+        try:
+            while True:
+                need(2)
+                b0, b1 = buf[0], buf[1]
+                n, off = b1 & 0x7F, 2
+                if n == 126:
+                    need(4)
+                    n, off = struct.unpack(">H", buf[2:4])[0], 4
+                assert b1 & 0x80, "a client frame is masked"
+                need(off + 4 + n)
+                key = buf[off:off + 4]
+                data = bytes(b ^ key[i % 4] for i, b in enumerate(buf[off + 4:off + 4 + n]))
+                buf = buf[off + 4 + n:]
+                if b0 & 0x0F == 0xA:          # our ping's pong
+                    continue
+                return json.loads(data), buf
+        except OSError:
+            return None, buf
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="xsm-wake-")
+        os.environ["XSM_HOME"] = os.path.join(self.tmp, "xsm")
+        # Who `me` is comes from these; the suite may run inside a real session.
+        for key in ("XSM_NO_CODEX_WAKE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET",
+                    "CODEX_THREAD_ID", "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED",
+                    "XSM_SANDBOXED"):
+            self.addCleanup(lambda k=key, v=os.environ.get(key):
+                            os.environ.__setitem__(k, v) if v is not None else os.environ.pop(k, None))
+            os.environ.pop(key, None)
+        for mod in [m for m in list(sys.modules) if m.startswith("xsm")]:
+            del sys.modules[mod]
+        from xsm import paths
+        paths.HOME = os.environ["XSM_HOME"]
+        paths.ensure_home()
+        self.home = os.path.join(self.tmp, "codex")
+        os.makedirs(self.home)
+        self.daemons = []
+
+    def tearDown(self):
+        for d in self.daemons:
+            d.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def daemon(self, mode):
+        d = FakeDaemon(self.home, mode)
+        self.daemons.append(d)
+        return d
+
+
+class StartQueuedTest(Base):
+    def start(self, timeout=3.0):
+        from xsm import codex_daemon
+        return codex_daemon.start_queued(self.home, "T1", "Q1", timeout=timeout)
+
+    def test_a_started_turn_is_started(self):
+        d = self.daemon("started")
+        self.assertEqual(self.start()[0], "started")
+        methods = [r.get("method") for r in d.requests]
+        self.assertEqual(methods, ["initialize", "initialized", "thread/queue/start"])
+        self.assertEqual(d.requests[0]["params"]["capabilities"], {"experimentalApi": True})
+        self.assertEqual(d.requests[2]["params"], {"threadId": "T1", "queuedSubmissionId": "Q1"})
+
+    def test_pings_and_notifications_are_passed_over(self):
+        self.daemon("chatty")
+        self.assertEqual(self.start()[0], "started")
+
+    def test_a_busy_thread_is_busy(self):
+        self.daemon("busy")
+        outcome, detail = self.start()
+        self.assertEqual(outcome, "busy")
+        self.assertIn("active or pending turn", detail)
+
+    def test_a_thread_the_daemon_does_not_hold_is_not_loaded(self):
+        self.daemon("not-loaded")
+        self.assertEqual(self.start()[0], "not-loaded")
+
+    def test_no_socket_is_unavailable(self):
+        self.assertEqual(self.start()[0], "unavailable")
+
+    def test_a_socket_nobody_listens_on_is_unavailable(self):
+        d = self.daemon("started")
+        d.sock.close()
+        self.assertEqual(self.start()[0], "unavailable")
+
+    def test_something_that_is_not_websocket_is_unavailable(self):
+        self.daemon("garbage")
+        self.assertEqual(self.start()[0], "unavailable")
+
+    def test_a_silent_daemon_times_out_as_unavailable(self):
+        self.daemon("silent")
+        began = time.monotonic()
+        self.assertEqual(self.start(timeout=0.5), ("unavailable", "timed out"))
+        self.assertLess(time.monotonic() - began, 2.0)
+
+    def test_it_never_resumes_or_starts_a_turn(self):
+        for mode in ("started", "busy", "not-loaded"):
+            for d in self.daemons:
+                d.close()
+            shutil.rmtree(os.path.join(self.home, "app-server-control"), ignore_errors=True)
+            d = self.daemon(mode)
+            self.start()
+            asked = {r.get("method") for r in d.requests}
+            self.assertFalse(asked & {"thread/resume", "turn/start"}, mode)
+
+
+class AdapterWakeTest(Base):
+    def _fake_codex(self, output):
+        path = os.path.join(self.tmp, "codex-bin")
+        with open(path, "w") as fh:
+            fh.write("#!/bin/sh\necho '%s'\nexit 0\n" % output)
+        os.chmod(path, 0o755)
+        return path
+
+    def test_the_queued_id_codex_printed_is_started(self):
+        from xsm import adapters
+        d = self.daemon("started")
+        codex = self._fake_codex("Queued message `019f-q` for thread `T1`")
+        with mock.patch.object(adapters, "codex_bins", lambda: [codex]):
+            out = adapters.to_codex(self.home, "T1", "hello")
+        self.assertEqual(out.wake, "started")
+        self.assertEqual(d.requests[-1]["params"], {"threadId": "T1",
+                                                     "queuedSubmissionId": "019f-q"})
+
+    def test_a_busy_thread_keeps_its_item_queued(self):
+        from xsm import adapters
+        self.daemon("busy")
+        codex = self._fake_codex("Queued message `q2` for thread `T1`")
+        with mock.patch.object(adapters, "codex_bins", lambda: [codex]):
+            self.assertEqual(adapters.to_codex(self.home, "T1", "hello").wake, "busy")
+
+    def test_a_row_written_directly_is_started_by_its_own_id(self):
+        import sqlite3
+        from xsm import adapters
+        con = sqlite3.connect(os.path.join(self.home, "queue_1.sqlite"))
+        con.execute("create table queued_items (id text, thread_id text, payload_json text, "
+                    "queue_order integer, created_at_ms integer, updated_at_ms integer)")
+        con.commit()
+        con.close()
+        d = self.daemon("started")
+        failed = mock.Mock(returncode=1, stdout="", stderr="no rollout found for thread id T1")
+        with mock.patch.object(adapters.subprocess, "run", lambda *a, **k: failed), \
+                mock.patch.object(adapters, "codex_bins", lambda: ["/bin/codex"]):
+            out = adapters.to_codex(self.home, "T1", "hello")
+        con = sqlite3.connect(os.path.join(self.home, "queue_1.sqlite"))
+        (row_id,) = con.execute("select id from queued_items").fetchone()
+        con.close()
+        self.assertEqual(out.wake, "started")
+        self.assertEqual(d.requests[-1]["params"]["queuedSubmissionId"], row_id)
+
+    def test_opting_out_asks_nothing(self):
+        from xsm import adapters, config
+        d = self.daemon("started")
+        codex = self._fake_codex("Queued message `q3` for thread `T1`")
+        with mock.patch.object(adapters, "codex_bins", lambda: [codex]), \
+                mock.patch.dict(os.environ, {"XSM_NO_CODEX_WAKE": "1"}):
+            self.assertEqual(adapters.to_codex(self.home, "T1", "hello").wake, "skipped")
+        config._save({"codex_wake": False})
+        with mock.patch.object(adapters, "codex_bins", lambda: [codex]):
+            self.assertEqual(adapters.to_codex(self.home, "T1", "hello").wake, "skipped")
+        self.assertEqual(d.requests, [])
+
+    def test_the_sender_is_told_it_started(self):
+        from xsm import adapters, registry, send
+        registry._running_codex = lambda: []
+        cwd = os.path.join(self.tmp, "proj")
+        os.makedirs(cwd)
+        registry.upsert("codex", self.home, "me", os.getpid(), cwd, name="me")
+        registry.upsert("codex", self.home, "peer", os.getpid(), cwd, name="peer")
+        me = registry.by_session("codex", "me")
+        started = adapters.Queued("Queued message `q` for thread `peer`")
+        started.wake = "started"
+        busy = adapters.Queued("Queued message `q` for thread `peer`")
+        busy.wake = "busy"
+        with mock.patch.dict(os.environ, {"CODEX_SANDBOX": "", "XSM_SANDBOXED": ""}):
+            with mock.patch.object(adapters, "to_codex", lambda *a: started):
+                r = send.send("codex:peer", "hi", sender=me)
+            self.assertEqual(r.status, "sent-unconfirmed", "still waiting for the receipt")
+            self.assertIn("started now", r.reason)
+            with mock.patch.object(adapters, "to_codex", lambda *a: busy):
+                r = send.send("codex:peer", "hi", sender=me)
+            self.assertNotIn("started now", r.reason)
+            self.assertIn("xsm inbox", r.reason)
+
+
+class InterruptedListTest(Base):
+    def _rollout(self, tid, events):
+        day = os.path.join(self.home, "sessions", "2026", "09", "28")
+        os.makedirs(day, exist_ok=True)
+        path = os.path.join(day, "rollout-2026-09-28T10-00-00-%s.jsonl" % tid)
+        with open(path, "w") as fh:
+            fh.write(json.dumps({"type": "session_meta", "payload": {"id": tid}}) + "\n")
+            for kind, extra in events:
+                fh.write(json.dumps({"type": "event_msg",
+                                     "payload": dict({"type": kind, "turn_id": "u"}, **extra)})
+                         + "\n")
+        return path
+
+    def test_the_last_turn_decides(self):
+        from xsm import registry
+        self._rollout("t-esc", [("task_started", {}), ("turn_aborted", {"reason": "interrupted"})])
+        self._rollout("t-again", [("turn_aborted", {"reason": "interrupted"}),
+                                  ("task_started", {})])
+        self._rollout("t-done", [("task_started", {}), ("task_complete", {})])
+        self._rollout("t-other", [("turn_aborted", {"reason": "replaced"})])
+        self.assertTrue(registry.codex_interrupted(self.home, "t-esc"))
+        self.assertFalse(registry.codex_interrupted(self.home, "t-again"))
+        self.assertFalse(registry.codex_interrupted(self.home, "t-done"))
+        self.assertFalse(registry.codex_interrupted(self.home, "t-other"))
+        self.assertFalse(registry.codex_interrupted(self.home, "t-none"))
+
+    def test_list_marks_an_interrupted_codex(self):
+        from xsm import cli, registry
+        registry._running_codex = lambda: []
+        cwd = os.path.join(self.tmp, "proj")
+        os.makedirs(cwd)
+        registry.upsert("codex", self.home, "t-esc", os.getpid(), cwd, name="stopped")
+        registry.upsert("codex", self.home, "t-run", os.getpid(), cwd, name="running")
+        self._rollout("t-esc", [("task_started", {}), ("turn_aborted", {"reason": "interrupted"})])
+        self._rollout("t-run", [("task_started", {})])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.main(["list", "--table", "--dir", cwd])
+        rows = {line.split("|")[2].strip(): line for line in out.getvalue().splitlines()[2:]}
+        self.assertIn("interrupted (Esc)", rows["stopped"])
+        self.assertNotIn("interrupted", rows["running"])
+
+
+if __name__ == "__main__":
+    unittest.main()

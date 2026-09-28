@@ -128,6 +128,7 @@ def _send(target_spec: str, body: str, *, sender: dict | None = None, kind: str 
                              traceparent=span.traceparent() if span is not None else None)
     ledger.queued(msg_id, sender, target, scope, kind, body)
 
+    queued = None
     try:
         if target.get("runtime") == "claude":
             if not target.get("socket"):
@@ -139,8 +140,8 @@ def _send(target_spec: str, body: str, *, sender: dict | None = None, kind: str 
             # Codex takes its queue only between turns; the copy is what a
             # session in the middle of one reads with `xsm inbox`.
             inbox.keep(str(target.get("session_id")), msg_id, content)
-            adapters.to_codex(target.get("home", os.path.expanduser("~/.codex")),
-                              str(target.get("session_id")), content)
+            queued = adapters.to_codex(target.get("home", os.path.expanduser("~/.codex")),
+                                       str(target.get("session_id")), content)
     except adapters.DeliveryError as err:
         inbox.drop(str(target.get("session_id")), msg_id)
         ledger.failed(msg_id, "%s: %s" % (err.reason, err.detail))
@@ -156,7 +157,11 @@ def _send(target_spec: str, body: str, *, sender: dict | None = None, kind: str 
             return SendResult(state["status"], (state.get("receipt") or {}).get("reason", ""),
                               msg_id, target)
     note = "queued"
-    if target.get("runtime") == "codex":
+    if target.get("runtime") == "codex" and getattr(queued, "wake", None) == "started":
+        # Still unconfirmed: the gate's receipt is what says it arrived.
+        note = ("queued and started now: the Codex session is running it as a turn (this also "
+                "wakes a session its user stopped with Esc)")
+    elif target.get("runtime") == "codex":
         note = ("queued; a Codex session picks the queue up within about 10 seconds when the "
                 "thread is loaded and idle, or mid-turn with `xsm inbox`")
     elif forecast == "hold":

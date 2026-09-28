@@ -32,6 +32,7 @@ xsm은 다양한 환경에서 실행되는 Claude Code와 Codex 세션 간의 �
 │   ├── send.py / receive.py     # 송신, 그리고 훅이 부르는 수신 게이트
 │   ├── envelope.py              # 메시지 봉투와 헤더
 │   ├── adapters.py              # 두 가지 네이티브 전달 경로 (UDS 소켓, codex queue)
+│   ├── codex_daemon.py          # Esc로 멈춘 Codex에 넣은 대기열 항목을 데몬에 시작 요청
 │   ├── config.py                # 프로젝트·범위·차단 설정
 │   ├── remote.py                # 다른 머신 (양방향 SSH, ADR-0007)
 │   ├── workers.py               # 워커 생성·승인·종료 (ADR-0010)

@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
     "deny": [],               # session refs that may neither send nor receive (ADR-0009)
     "ignore_frameworks": [],  # frameworks inside which xsm still starts workers: orca, herdr, all
     "telemetry_retention_days": 7,   # spans and metric points (ADR-0011); 0 keeps them forever
+    "codex_wake": True,       # ask Codex's daemon to start a queued message (ADR-0002 appendix)
 }
 
 

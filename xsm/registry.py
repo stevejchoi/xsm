@@ -12,6 +12,7 @@ sessions behind their back (S9 conclusion 6).
 from __future__ import annotations
 
 import glob
+import json
 import os
 import sqlite3
 import time
@@ -121,6 +122,65 @@ def _codex_thread_name(home: str, thread_id: str) -> str | None:
     finally:
         con.close()
     return row[0] if row and row[0] else None
+
+
+def codex_rollout(home: str, thread_id: str) -> str | None:
+    """The rollout file of a Codex thread: its `threads` row names it, and the
+    file name ends in the thread id when the row cannot be read."""
+    db = os.path.join(home, "state_5.sqlite")
+    if os.path.exists(db):
+        try:
+            con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=2)
+            try:
+                row = con.execute("select rollout_path from threads where id = ?",
+                                  (thread_id,)).fetchone()
+            finally:
+                con.close()
+            if row and row[0] and os.path.exists(row[0]):
+                return row[0]
+        except sqlite3.Error:
+            pass
+    found = glob.glob(os.path.join(home, "sessions", "*", "*", "*", "rollout-*-%s.jsonl" % thread_id))
+    return max(found) if found else None
+
+
+ROLLOUT_TAIL = 256 * 1024
+
+
+def codex_interrupted(home: str, thread_id: str) -> bool:
+    """Whether the thread's last turn ended with Esc and none has started since.
+
+    Codex's queue does not start anything in such a thread until its user
+    types (0.158; ADR-0002 appendix), so `xsm list` says so. The rollout's
+    last turn event decides: `turn_aborted` with reason `interrupted`, not
+    followed by `task_started` or `task_complete` (measured 2026-09-28).
+    Reads only the file's tail; a turn longer than that reads as not
+    interrupted, which only loses the note."""
+    path = codex_rollout(home, thread_id) if home and thread_id else None
+    if not path:
+        return False
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - ROLLOUT_TAIL))
+            tail = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return False
+    for line in reversed(tail.splitlines()):
+        if '"turn_aborted"' not in line and '"task_started"' not in line and \
+                '"task_complete"' not in line:
+            continue
+        try:
+            payload = (json.loads(line).get("payload") or {})
+        except (ValueError, AttributeError):
+            continue
+        kind = payload.get("type") if isinstance(payload, dict) else None
+        if kind == "turn_aborted":
+            return payload.get("reason") == "interrupted"
+        if kind in ("task_started", "task_complete"):
+            return False
+    return False
 
 
 def _enrich(record: dict) -> dict:

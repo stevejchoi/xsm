@@ -113,3 +113,23 @@ Codex TUI가 새 스레드를 열면 첫 프롬프트나 `/rename` 전까지 그
 
 PTY 주입(D)을 채택하지 않는다는 결정은 그대로다. 이 경로는 화면에 키를 넣지 않고 Codex가 스스로 읽는 대기열에 쓴다.
 
+## 부록: Esc로 멈춘 Codex도 깨운다 (사용자 결정, 2026-09-28)
+
+사용자 보고(2026-09-28): Codex 세션에서 Esc로 턴을 멈추면 그 뒤에 보낸 xsm 메시지가 사람이 뭔가 입력할 때까지 도착하지 않는다. 원인은 Codex다. 0.158의 대기열 확장은 상태가 Interrupted인 스레드를 일부러 건너뛴다(`codex-rs/ext/queue/src/service.rs` 221·477·551행 부근). 위 결정에서 "Interrupted 대상에는 경고"로만 남겨 둔 경우다.
+
+방법: 0.157부터 Codex TUI는 기본적으로 `CODEX_HOME`마다 하나 뜨는 app-server 데몬의 클라이언트다(`daemon_auto_start`, 기본 켜짐. `--no-daemon`, `--profile`, 일부 `-c` 옵션으로 띄우면 내장 서버를 쓴다). 데몬의 제어 소켓(`$CODEX_HOME/app-server-control/app-server-control.sock`, 권한 0600, 토큰 없음)에 WebSocket으로 붙어 `thread/queue/start`를 부르면, 데몬이 대기열 항목 하나를 지금 턴으로 시작한다. xsm은 대기열에 넣은 직후(`codex queue`가 출력한 항목 id, 또는 직접 쓴 행의 id로) 이 요청을 한 번 보낸다. 실측(2026-09-28, 0.158.0): Esc 뒤 25초 넘게 대기열에 있던 메시지가 이 요청 한 번에 `inProgress` 턴이 됐고, TUI가 메시지를 보여 주며 턴을 돌렸고, xsm 훅이 영수증을 써 원장이 `delivered`가 됐다.
+
+응답에 따라 이렇게 한다.
+
+- 턴이 시작됐다: 발신자에게 "지금 시작됐다"고 알린다. 그래도 결과는 `sent-unconfirmed`다. 전달 여부는 여전히 수신 훅의 영수증이 정한다.
+- "이미 진행 중이거나 대기 중인 턴이 있다": 항목은 대기열에 남고 턴이 끝나면 Codex가 평소대로 가져간다.
+- "먼저 스레드를 resume하라": 데몬에 그 스레드가 없다(내장 서버로 뜬 TUI이거나 닫힌 스레드). 대기열 경로만 남는다.
+- 소켓이 없거나, 연결·핸드셰이크가 실패하거나, 3초 안에 답이 없거나, 모르는 응답: 아무것도 하지 않은 것과 같다. 샌드박스 셸에서는 소켓에 닿지 못하므로 늘 이쪽이다(MCP `xsm_send`는 샌드박스 밖에서 돈다).
+
+하지 않는 것: `thread/resume`과 `turn/start`는 부르지 않는다. resume은 스레드에 두 번째 기록자를 만들 수 있고, `turn/start`는 진행 중인 턴에 끼어든다(steer). 둘 다 G3에서 받아들이지 않은 개입이다. PTY 주입(D)을 채택하지 않는다는 결정도 그대로다. 화면에 키를 넣지 않고, Codex의 데몬이 제공하는 요청으로 Codex가 이미 가진 대기열 항목을 시작시킬 뿐이다.
+
+대가: `thread/queue/start`는 Codex의 실험 API(`experimentalApi`)다. 바뀌면 응답이 모르는 모양이 되고, xsm은 그것을 "쓸 수 없음"으로 보고 대기열 경로만 쓴다. 메시지를 잃지 않고 이 부록 이전 동작(사람의 다음 입력을 기다림)으로 돌아간다.
+
+끄기: `~/.xsm/config.json`에 `"codex_wake": false`, 또는 환경 변수 `XSM_NO_CODEX_WAKE=1`.
+
+`xsm list`는 마지막 턴이 Esc로 끝나고(rollout의 `turn_aborted`, `reason: interrupted`) 그 뒤 시작된 턴이 없는 Codex 세션에 `interrupted (Esc)`를 표시한다. 정보용이다.

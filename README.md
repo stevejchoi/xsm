@@ -32,6 +32,7 @@ xsm lets Claude Code and Codex sessions running in different environments talk t
 │   ├── send.py / receive.py     # sending, and the receive gate the hooks call
 │   ├── envelope.py              # message envelope and headers
 │   ├── adapters.py              # the two native delivery paths (UDS socket, codex queue)
+│   ├── codex_daemon.py          # asks Codex's app-server daemon to start a queued message (Esc)
 │   ├── config.py                # project, scope and block settings
 │   ├── remote.py                # other machines (two-way SSH, ADR-0007)
 │   ├── workers.py               # spawning, approving and stopping workers (ADR-0010)

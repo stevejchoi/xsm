@@ -157,7 +157,9 @@ Read the result as it is written:
 
 A Codex session picks up a queued message within about ten seconds when its
 thread is loaded and idle, otherwise at its user's next input. It cannot be
-interrupted mid-turn. Never report `sent-unconfirmed` as delivered.
+interrupted mid-turn. A session stopped with Esc (`interrupted (Esc)` in
+`xsm list`) is started through Codex's daemon when it can be; the result then
+says "started now". Never report `sent-unconfirmed` as delivered.
 
 From a sandboxed shell (a background worker, a Codex workspace-write
 session) `xsm send` to a Codex peer refuses at once and says to use the

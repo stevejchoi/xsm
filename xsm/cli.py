@@ -157,6 +157,7 @@ def _folder_groups(rows: list, me: dict | None, here: str, label) -> list:
                 "" if r.get("registered") or r.get("fresh") else "unregistered",
                 "out-of-scope" if me and not r.get("scope") and r.get("scope_reason") != "self" else "",
                 "would-be-held" if r.get("native") == "hold" else "",
+                "interrupted (Esc)" if r.get("interrupted") else "",
                 r.get("state") if r.get("state") != "live" and not r.get("fresh") else "") if f]
             if r.get("why"):
                 flags.append(r["why"])
@@ -182,6 +183,11 @@ def cmd_list(args) -> int:
         row["scope_reason"] = reason
         row["addressable"] = bool(row.get("registered") and row.get("state") == "live" and
                                   (scope or reason == "self"))
+        # Informational: a queued message waits in such a thread unless the
+        # daemon starts it (ADR-0002 appendix, 2026-09-28).
+        row["interrupted"] = bool(row.get("runtime") == "codex" and row.get("state") == "live"
+                                  and registry.codex_interrupted(row.get("home") or "",
+                                                                 str(row.get("session_id") or "")))
     if args.json:
         print(json.dumps(rows, ensure_ascii=False, indent=1))
         return OK
