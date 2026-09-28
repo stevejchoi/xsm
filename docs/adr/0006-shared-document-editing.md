@@ -102,7 +102,7 @@
 **agora 방식을 택한다**(사용자 결정 2026-09-22). 선택지 C(append-only 로그와 도출 정본)를 agora의 기록 모델로 구체화한다(`docs/references/agora.md`).
 
 - **노드.** 기여 하나가 바꿀 수 없는 노드 파일 하나다. 위치는 `<문서>.nodes/<id>.md`이고 저장소에 커밋된다. 머리에는 id, 시각, 작성자(xsm이 판정한 사람 또는 세션 ref), 태그, 부모 id 목록을 적는다. id는 내용과 머리의 해시에서 나온다. 이미 있는 노드는 고치지 않는다. 고치려면 부모를 가리키는 새 노드를 쓴다. 노드마다 파일 이름이 다르므로 git 병합에서 충돌하지 않는다. 동시 기여는 모두 보존된다.
-- **태그.** agora의 예약 태그를 쓴다. `setup`, `result`, `insight`, `hypothesis`, `verification`, `report`, `wip`, `endorsed`다. `endorsed`는 사람만 단다. 채널의 `decision`과 같은 규칙으로, 터미널의 사람이나 MCP elicitation을 거친다.
+- **태그.** agora의 예약 태그를 쓴다. `setup`, `result`, `insight`, `hypothesis`, `verification`, `report`, `wip`, `endorsed`다. `endorsed`는 사람만 단다. 채널의 `decision`과 같은 규칙으로, 사람이 터미널에서 직접 달거나, MCP elicitation 양식에서 고른다.
 - **정본.** `<문서>.md`는 노드에서 만든다(`xsm doc render`). 머리에 "생성된 파일"이라고 적고 손으로 고치지 않는다. 기본 뷰는 가장 최근의 `endorsed`, 없으면 가장 최근의 `report` 노드 본문이다. 그 아래에 아직 이어지지 않은 끝 노드(leaves)와 검증되지 않은 가설 목록을 붙인다. 정본이 병합에서 충돌하면 다시 생성한다.
 - **보기.** `xsm doc log|leaves|show`가 있다. agora의 분석 뷰에 해당한다.
 - **범위 밖.** 잠금, 임대, 통합자 병목이 없다. 사본은 "노드 + 생성된 정본 1개"다. 노드는 이력이라 늘어나는 것이 설계다. 로컬 파일 시스템과 git만 대상이다.

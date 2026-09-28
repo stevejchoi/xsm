@@ -138,7 +138,7 @@ Orca 안에서 돌던 Codex 세션이 오케스트레이터로 xsm 워커를 직
 - `config.json`의 `ignore_frameworks`(`orca`, `herdr`, `all`)에 든 프레임워크 안에서는 거부하지 않는다.
   기본값은 빈 목록이라 기존 동작 그대로다.
 - `xsm frameworks ignore <이름>`은 사람만 한다. 에이전트가 워커를 띄울 수 있는 곳을 넓히기 때문이다.
-  판정은 승인 경로와 같은 사람 터미널 검사다(TTY와 에이전트 표식). `respect`는 좁히는 쪽이라 누구나 한다.
+  사람이 터미널에서 직접 쳤는지는 승인 경로와 같은 방법(TTY와 에이전트 표식)으로 판정한다. `respect`는 좁히는 쪽이라 누구나 한다.
   `xsm block`/`unblock`과 같은 비대칭이다.
 - 끈 뒤의 워커는 프레임워크 밖과 같다. tmux 패널 안이 아니면 백그라운드 tmux 세션(`xsm-workers`)에 뜬다.
   Orca는 그 워커를 모르므로 Orca 화면에는 나타나지 않는다. 상태는 statusline과 `xsm workers`로 본다.
