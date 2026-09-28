@@ -8,6 +8,8 @@ Let running Claude Code and Codex sessions find each other and exchange messages
 
 xsm lets Claude Code, Codex, and other agent runtimes running in different environments talk to each other directly.
 
+![How XSM connects agent sessions through native runtime paths and explicit communication scopes](docs/assets/xsm-overview.svg)
+
 ### Key features
 
 - **Cross-session messaging**: send and receive messages between sessions on the same machine or on a remote server
