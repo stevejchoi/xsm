@@ -130,10 +130,11 @@ def to_codex(codex_home: str, thread_id: str, content: str) -> str:
     return out
 
 
-# `codex queue` prints "Queued message `<id>` for thread `<thread>`"
-# (codex-rs/tui/src/session_queue_commands.rs, 0.158); queue_direct says
-# "queued `<id>` directly".
-QUEUED_ID = re.compile(r"[Qq]ueued (?:message )?`([^`]+)`")
+# `codex queue` 0.158 prints "Queued message <id> for thread <thread>." with
+# no backticks (measured 2026-09-28; the source's format string reads as if it
+# had them, and the first wake-up on a real Codex never fired). queue_direct
+# says "queued `<id>` directly". Accept both.
+QUEUED_ID = re.compile(r"[Qq]ueued (?:message )?`?([0-9A-Za-z][0-9A-Za-z-]*)`?")
 
 
 def queued_id(text: str) -> str | None:

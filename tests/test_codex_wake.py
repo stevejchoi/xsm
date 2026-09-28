@@ -242,6 +242,15 @@ class AdapterWakeTest(Base):
         self.assertEqual(d.requests[-1]["params"], {"threadId": "T1",
                                                      "queuedSubmissionId": "019f-q"})
 
+    def test_the_id_codex_0158_really_prints_is_found(self):
+        # No backticks in the real output (measured 2026-09-28).
+        from xsm import adapters
+        d = self.daemon("started")
+        codex = self._fake_codex("Queued message 01a0e7c4-fe85-7d23 for thread T1.")
+        with mock.patch.object(adapters, "codex_bins", lambda: [codex]):
+            self.assertEqual(adapters.to_codex(self.home, "T1", "hello").wake, "started")
+        self.assertEqual(d.requests[-1]["params"]["queuedSubmissionId"], "01a0e7c4-fe85-7d23")
+
     def test_a_busy_thread_keeps_its_item_queued(self):
         from xsm import adapters
         self.daemon("busy")
