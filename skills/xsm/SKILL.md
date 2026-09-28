@@ -14,7 +14,7 @@ is a shell command, `xsm …`.
 
 When your user typed `/xsm <command>` (Claude Code) or `$xsm <command>` (Codex),
 the command is the first word after it; in Claude Code it is also passed to
-you as `ARGUMENTS:` below. Do exactly what its row says and nothing else.
+you as `ARGUMENTS:` below. For a command listed here, do exactly what its row says.
 
 **Display commands** — `list`, `who`, `projects`, `doctor`. There is nothing to
 decide. Run this one shell command, exactly as written:
@@ -64,8 +64,8 @@ For these four: call the tool once and reply with its result, copied exactly,
 inside one code block: it says who answered, and a terminal command when a form
 did not reach them. Say your user refused only if it says they chose `deny`.
 
-**Your user typed `/xsm` or `$xsm` with no command, or one not listed here** —
-reply with exactly:
+**Words that are not a command** (`/xsm tell plugin-worker what I did`): a
+request in words, see "Called without one". **Nothing, or nonsense** — reply with exactly:
 usage: /xsm list | who | log | projects | doctor | send <target> <message> | link <folder> | join <project> | leave <project> | reach <folder>
 
 ## Called without one
