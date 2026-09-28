@@ -374,7 +374,7 @@ class Server:
         if not folder:
             raise channel.ChannelError("dir: the folder to reach")
         if args.get("drop"):
-            return "dropped %d reach(es)" % config.drop_reach(me.get("ref"), folder)
+            return "dropped %d reach(es)" % config.drop_reach(me.get("ref"), folder, session=me)
         command = "xsm reach %s --session %s" % (shlex.quote(folder),
                                                  shlex.quote("ref:%s" % me.get("ref")))
         if "elicitation" not in (self.client_caps or {}):
@@ -397,7 +397,7 @@ class Server:
                     "reach them, they can run `%s` in a terminal instead" % (why, command))
         try:
             entry, added = config.add_reach(me.get("ref"), folder,
-                                            os.environ.get("USER") or "person")
+                                            os.environ.get("USER") or "person", session=me)
         except ValueError as exc:
             raise channel.ChannelError(str(exc))
         return "%s: this session can now talk with the sessions in %s; run `xsm list` to see them" % (
