@@ -378,7 +378,7 @@ xsm approvals | approve <id> | deny <id>
 | 원격 | SSH로 짝지은 프로젝트끼리 이미 떠 있는 세션에 보내는 것까지다([다른 기계의 세션](#다른-기계의-세션)). `xsm list`에 원격 세션이 나오지 않고, 채널·문서 공유와 원격 워커는 없다. 단위 테스트는 가짜 ssh로 도는 3건뿐이고, 실제 두 기계 전달은 수동으로만 확인했다. |
 | 채널·공동 문서 | 한 기계 안의 append-only 파일이다([채널](#채널), [공동 문서](#공동-문서)). 원격으로 공유되지 않고, 파일 잠금이 없어 동시 기록이 많은 규모(스웜)는 검증하지 않았다. |
 | 플랫폼 | macOS와 Linux만 된다. Unix 소켓, `ps`, `/dev/tty`, tmux 워커에 기댄다. 네이티브 Windows의 Claude inbox는 연결마다 auth 줄을 요구하는데 xsm은 보내지 않으므로 전달도 되지 않는다. |
-| Codex의 승인 양식 | `xsm_join`·`xsm_reach`·`xsm_grant` 같은 MCP 양식(elicitation)은 Codex가 사용자에게 보이지 않고 스스로 답할 때가 있다(0.158 소스 확인). `approval_policy = "never"`나 MCP elicitation을 끈 granular 정책이면 보이지 않고 거절하고, auto-review가 켜져 있으면 사용자 대신 판정한다. xsm은 사람이 고른 답만 받아들이고, 결과 문구에 누가 답했는지와 터미널에서 할 명령을 적는다. 그런 설정에서는 사람이 터미널에서 `xsm join`/`xsm reach`를 친다. |
+| Codex의 승인 양식 | `xsm_join`·`xsm_reach`·`xsm_grant` 같은 MCP 양식(elicitation)은 Codex가 사용자에게 보이지 않고 거절할 때가 있다(0.158 소스 확인). `approval_policy = "never"`나 MCP elicitation을 끈 granular 정책이면 스레드에 full-access 양식 입력이 켜져 있지 않은 한 양식을 띄우지 않고 거절한다. 이 거절은 사람이 Decline을 누른 것과 구별되지 않으므로 결과 문구는 둘 다일 수 있다고 적는다. Codex의 auto-review(guardian)는 `_meta`에 승인 요청을 선언한 양식만 검토하므로 xsm 양식에는 답하지 않는다. xsm은 클라이언트가 보고한 답 중 사람이 고른 것만 받아들이고 (`_meta.approvals_reviewer`가 `user`가 아니면 거부), 사람이 고르지 않았을 때만 결과 문구에 터미널에서 칠 명령을 적는다. 사용자가 설정한 클라이언트 훅(Claude Code Elicitation 훅 등)이 양식에 답하면 사용자의 답으로 보고되며, xsm은 이를 구별할 수 없다. |
 
 ## 상태 파일
 

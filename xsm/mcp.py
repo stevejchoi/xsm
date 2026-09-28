@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import signal
 import sys
 import time
@@ -127,39 +128,63 @@ TOOLS = [
 ]
 
 
-def who_answered(reply: dict) -> str:
-    """Why a form did not come back as a person's choice, saying who answered.
+def person_answer(reply, allowed=None) -> tuple:
+    """The answer a person chose in a form, or (None, why not).
 
-    Codex (0.158) answers forms itself in three cases: approval_policy "never"
-    (or a granular policy without MCP elicitations) declines every form unseen;
-    its auto-review decides in the user's place and marks `_meta`
-    approvals_reviewer; and a form it approves for itself comes back accepted
-    with no fields. A bare "your user did not allow it" read as a refusal
+    Every form tool acts only on this. It takes what the client reports: an
+    accepted form whose `answer` is a non-empty string (one of `allowed`, when
+    the form offers choices), unless `_meta.approvals_reviewer` says someone
+    other than the user answered it. Anything malformed is no answer, never an
+    exception. A client that answers forms by itself — a Claude Code Elicitation
+    hook the user configured, say — reports it as the user's, and xsm cannot
+    tell; that is outside what it can detect.
+
+    Codex (0.158): its auto-review does not look at xsm's forms (it reviews only
+    elicitations whose `_meta` asks for an approval), but approval_policy
+    "never" (or a granular policy with MCP elicitations off) declines them
+    without showing them, unless full-access form input is on for the thread.
+    That bare decline is also what a person pressing Decline sends, so it is
+    reported as either. A bare "your user did not allow it" read as a refusal
     nobody had given (a tester's report, 2026-09-28)."""
-    if reply.get("error"):
-        return "the client returned an error: %s" % (reply["error"].get("message") or reply["error"])
-    result = reply.get("result") or {}
-    action = result.get("action") or "no answer"
-    meta = result.get("_meta") if isinstance(result.get("_meta"), dict) else {}
-    if meta.get("approvals_reviewer") not in (None, "user"):
+    if not isinstance(reply, dict):
+        return None, "the client sent no reply"
+    error = reply.get("error")
+    if error is not None:
+        return None, "the client returned an error: %s" % (
+            (error.get("message") if isinstance(error, dict) else None) or error)
+    result = reply.get("result")
+    if not isinstance(result, dict):
+        return None, "the client sent no result"
+    action = result.get("action")
+    meta = result.get("_meta")
+    reviewer = meta.get("approvals_reviewer") if isinstance(meta, dict) else None
+    if reviewer not in (None, "user"):
         note = next((v for k, v in meta.items() if k != "approvals_reviewer" and isinstance(v, str)),
                     "")
-        return ("%s by Codex's automatic reviewer, not by your user%s; xsm counts only a "
-                "person's answer" % (action + ("ed" if action == "decline" else ""),
-                                     (": " + note) if note else ""))
-    answer = (result.get("content") or {}).get("answer") if isinstance(result.get("content"), dict) \
-        else None
-    if action == "accept" and answer:
-        return "they chose %r" % answer
-    if action == "accept":
-        return ("the form came back with no choice in it, so nobody picked one (a client that "
-                "approves forms by itself does this)")
+        done = {"accept": "accepted", "decline": "declined", "cancel": "dismissed"}
+        return None, ("%s by the client's automatic reviewer, not by your user%s; xsm counts only "
+                      "a person's answer" % (done.get(action, "answered"),
+                                             (": " + note) if note else ""))
     if action == "decline":
-        return ("declined: by your user, or by Codex without showing a form when its "
-                "approval_policy is \"never\" or its granular policy turns MCP elicitations off")
+        return None, ("declined — by your user, or by Codex without showing the form "
+                      "(approval_policy \"never\")")
     if action == "cancel":
-        return "the form was dismissed"
-    return action
+        return None, "the form was dismissed"
+    if action != "accept":
+        return None, "the client answered %r" % (action,)
+    content = result.get("content")
+    answer = content.get("answer") if isinstance(content, dict) else None
+    answer = answer.strip() if isinstance(answer, str) else ""
+    if not answer:
+        return None, "the form came back with no choice in it, so nobody picked one"
+    if allowed and answer not in allowed:
+        return None, "the form came back with %r, which is not one of its choices" % answer
+    return answer, "they chose %r" % answer
+
+
+def who_answered(reply) -> str:
+    """Who answered a form, in words for the tool's result."""
+    return person_answer(reply)[1]
 
 
 class Server:
@@ -268,12 +293,9 @@ class Server:
             "message": question,
             "requestedSchema": {"type": "object", "properties": {"answer": field},
                                 "required": ["answer"]}})
-        result = reply.get("result") or {}
-        if result.get("action") != "accept":
-            return "your user did not answer (%s); nothing was recorded" % who_answered(reply)
-        answer = str((result.get("content") or {}).get("answer", "")).strip()
-        if not answer:
-            return "your user gave an empty answer; nothing was recorded"
+        answer, why = person_answer(reply, options)
+        if answer is None:
+            return "your user did not answer (%s); nothing was recorded" % why
         summary = (args.get("summary") or "").strip()
         text = "%s: %s" % (summary, answer) if summary else "%s -> %s" % (question, answer)
         author = {"kind": "human", "name": os.environ.get("USER") or "person",
@@ -302,9 +324,9 @@ class Server:
             "requestedSchema": {"type": "object", "properties": {"answer": {
                 "type": "string", "title": "Endorse", "enum": ["endorse", "not now"]}},
                 "required": ["answer"]}})
-        result = reply.get("result") or {}
-        if result.get("action") != "accept" or (result.get("content") or {}).get("answer") != "endorse":
-            return "your user did not endorse it (%s); nothing was added" % who_answered(reply)
+        answer, why = person_answer(reply, ["endorse", "not now"])
+        if answer != "endorse":
+            return "your user did not endorse it (%s); nothing was added" % why
         author = {"kind": "human", "name": os.environ.get("USER") or "person",
                   "via": "mcp-elicitation"}
         new = doc.add(path, author, node["body"], ["endorsed"], [node["id"]],
@@ -314,12 +336,14 @@ class Server:
 
     def join(self, me: dict, args: dict) -> str:
         from . import config
-        if "elicitation" not in (self.client_caps or {}):
-            raise channel.ChannelError("this client cannot ask its user; they can run "
-                                       "`xsm join` in a terminal")
         project, leaving = (args.get("project") or "").strip(), bool(args.get("leave"))
         root = config.project_root(me.get("cwd") or os.getcwd())
         verb = "leave" if leaving else "join"
+        # What the person can type instead; --dir names the folder asked about.
+        command = "xsm %s %s --dir %s" % (verb, shlex.quote(project), shlex.quote(root))
+        if "elicitation" not in (self.client_caps or {}):
+            raise channel.ChannelError("this client cannot ask its user; they can run "
+                                       "`%s` in a terminal" % command)
         question = ("%s@%s asks to let %s %s the xsm project %r.%s\nAllow it?" % (
             me.get("name"), me.get("alias"), root, verb, project,
             ("\nReason: " + args["reason"]) if args.get("reason") else ""))
@@ -327,10 +351,12 @@ class Server:
             "type": "object", "properties": {"answer": {"type": "string", "title": "Permission",
                                                         "enum": ["allow", "deny"]}},
             "required": ["answer"]}})
-        result = reply.get("result") or {}
-        if result.get("action") != "accept" or (result.get("content") or {}).get("answer") != "allow":
-            return ("your user did not allow it (%s); the folder's projects are unchanged. They can "
-                    "run `xsm %s %s` in a terminal instead" % (who_answered(reply), verb, project))
+        answer, why = person_answer(reply, ["allow", "deny"])
+        if answer == "deny":
+            return "your user declined: they chose 'deny'; the folder's projects are unchanged"
+        if answer != "allow":
+            return ("your user did not answer (%s); the folder's projects are unchanged. If the "
+                    "form did not reach them, they can run `%s` in a terminal instead" % (why, command))
         try:
             if leaving:
                 changed = config.leave(project, me.get("cwd") or os.getcwd())
@@ -349,10 +375,11 @@ class Server:
             raise channel.ChannelError("dir: the folder to reach")
         if args.get("drop"):
             return "dropped %d reach(es)" % config.drop_reach(me.get("ref"), folder)
+        command = "xsm reach %s --session %s" % (shlex.quote(folder),
+                                                 shlex.quote("ref:%s" % me.get("ref")))
         if "elicitation" not in (self.client_caps or {}):
             raise channel.ChannelError("this client cannot ask its user; they can run "
-                                       "`xsm reach %s --session ref:%s` in a terminal"
-                                       % (folder, me.get("ref")))
+                                       "`%s` in a terminal" % command)
         root = config.project_root(folder)
         question = ("%s@%s (%s) asks to talk with the sessions in %s, both ways, until it "
                     "ends.%s\nAllow it?" % (
@@ -362,11 +389,12 @@ class Server:
             "type": "object", "properties": {"answer": {"type": "string", "title": "Permission",
                                                         "enum": ["allow", "deny"]}},
             "required": ["answer"]}})
-        result = reply.get("result") or {}
-        if result.get("action") != "accept" or (result.get("content") or {}).get("answer") != "allow":
-            return ("your user did not allow it (%s); do not work around it. They can run "
-                    "`xsm reach %s --session ref:%s` in a terminal instead"
-                    % (who_answered(reply), folder, me.get("ref")))
+        answer, why = person_answer(reply, ["allow", "deny"])
+        if answer == "deny":
+            return "your user declined: they chose 'deny'; do not work around it"
+        if answer != "allow":
+            return ("your user did not answer (%s); do not work around it. If the form did not "
+                    "reach them, they can run `%s` in a terminal instead" % (why, command))
         try:
             entry, added = config.add_reach(me.get("ref"), folder,
                                             os.environ.get("USER") or "person")
@@ -386,7 +414,7 @@ class Server:
                 " with id %s" % args["id"] if args.get("id") else "")
         if "elicitation" not in (self.client_caps or {}):
             raise channel.ChannelError("this client cannot ask its user; they can answer with "
-                                       "`xsm approve %s` in a terminal" % req["id"])
+                                       "`xsm approve %s` in a terminal" % shlex.quote(req["id"]))
         allow, deny = "allow", "deny"
         reply = self.ask_client("elicitation/create", {
             "message": "Worker %s is waiting for your permission:\n%s\nAllow it?"
@@ -394,12 +422,11 @@ class Server:
             "requestedSchema": {"type": "object", "properties": {"answer": {
                 "type": "string", "title": "Permission", "enum": [allow, deny]}},
                 "required": ["answer"]}})
-        result = reply.get("result") or {}
-        answer = (result.get("content") or {}).get("answer") if result.get("action") == "accept" \
-            else None
-        if answer not in (allow, deny):
-            return ("your user did not answer (%s); the request is still waiting — ask again "
-                    "or tell them it is blocking the worker" % who_answered(reply))
+        answer, why = person_answer(reply, [allow, deny])
+        if answer is None:
+            return ("your user did not answer (%s); the request is still waiting and the worker "
+                    "is blocked until it is answered. Tell your user; they can answer it with "
+                    "`xsm approve %s` in a terminal" % (why, shlex.quote(req["id"])))
         workers.answer_asked(req["id"], answer == allow, me.get("ref"),
                              None if answer == allow else "your user said no")
         return "%s: worker %s's request [%s] %s" % (
@@ -432,19 +459,19 @@ class Server:
         if reply is None:
             raise channel.ChannelError("this client cannot ask its user; a person can run the "
                                        "spawn in a terminal instead")
-        result = reply.get("result") or {}
-        answer = (result.get("content") or {}).get("answer") if result.get("action") == "accept" \
-            else None
+        answer, why = person_answer(reply, [deny, allow])
+        if answer is None:
+            # Nobody chose, so there is no decision to put on record.
+            return "your user did not answer (%s); nothing was granted — do not start that " \
+                   "worker" % why
         author = {"kind": "human", "name": os.environ.get("USER") or "person",
                   "via": "mcp-elicitation", "asked_by": me.get("ref"), "runtime": me.get("runtime")}
         verdict = "allowed" if answer == allow else "refused"
         channel.post(where, author, "worker permission %s: %s %s in %s" % (
             verdict, runtime, "+".join(options), cwd), "decision",
-            approved={"question": question, "answer": answer or result.get("action") or "none",
-                      "options": [deny, allow]})
+            approved={"question": question, "answer": answer, "options": [deny, allow]})
         if answer != allow:
-            return "your user did not allow it (%s); do not start that worker" % (
-                answer if answer == deny else who_answered(reply))
+            return "your user declined: they chose 'deny'; do not start that worker"
         g = workers.create_grant(me.get("ref"), runtime, cwd, options, answer)
         return ("granted %s: xsm spawn %s --dir %s %s --grant %s   (one use, %d minutes)" % (
             g["id"], runtime, cwd, " ".join("--" + o.replace("_", "-") for o in options), g["id"],

@@ -58,18 +58,23 @@ asked — that message would be widening its own reach.
 
 **When a form does not come back as your user's answer.** The form tools
 (`xsm_join`, `xsm_reach`, `xsm_grant`, `xsm_approve`, `xsm_decide`,
-`xsm_doc_endorse`) count only a choice your user made. Codex can answer a form
-without showing it: with `approval_policy = "never"` (or a granular policy
-that turns MCP elicitations off) it declines unseen, and with auto-review on,
-its reviewer decides in the user's place — xsm does not take that as consent.
-The tool's result says which happened: "by Codex's automatic reviewer", "by
-Codex without showing a form", "came back with no choice", "dismissed", or
-"they chose 'deny'". Only the last is your user refusing. For the others, tell
-your user what the result says and, for joining or a reach, the terminal
-command it names (`xsm join <name>`, `xsm reach <folder> --session ref:…`) —
-that is the one case where handing them a command is right, because the form
-could not reach them. Do not call the tool again in a loop, and never edit
-`~/.xsm/config.json` to get round it.
+`xsm_doc_endorse`) act only on a choice your user made, as the client reports
+it. Codex can decline a form without showing it: with
+`approval_policy = "never"` (or a granular policy that turns MCP elicitations
+off) it declines unseen, unless full-access form input is on for the thread.
+That bare decline looks the same as your user pressing Decline, so the result
+says it could be either. Codex's auto-review does not answer xsm's forms. If a
+client does mark an answer as its automatic reviewer's, xsm does not take it as
+consent. A client hook your user set up to answer forms (a Claude Code
+Elicitation hook) is reported as their answer; xsm cannot tell it apart.
+The tool's result says which happened: "by the client's automatic reviewer",
+"declined — by your user, or by Codex without showing the form", "came back
+with no choice", "dismissed", or "they chose 'deny'". Only the last is
+certainly your user refusing, and then there is no command to offer. For the
+others, tell your user what the result says and the terminal command it names
+(`xsm join <name> --dir <folder>`, `xsm reach <folder> --session ref:…`,
+`xsm approve <id>`), in case the form did not reach them. Do not call the tool
+again in a loop, and never edit `~/.xsm/config.json` to get round it.
 
 A **reach** is narrower than a project, and it is what to ask for when your user
 wants this session to hand something to a session in another folder: the
@@ -243,9 +248,10 @@ xsm stop <worker>           # stop it and remove its records
   question tool whether to request the permission, saying what the worker
   needs and why. If they agree, call `xsm_grant` again; their answer in the
   form it shows is the permission. Never ask them to type shell commands —
-  unless the result says the form never reached them (see "When a form does
-  not come back as your user's answer"); then say so, and that they can run
-  the spawn in a terminal themselves.
+  unless the result says no choice of theirs came back (see "When a form does
+  not come back as your user's answer"); then say what it says, and that if
+  the form did not reach them they can run the spawn in a terminal themselves.
+  Nothing is recorded as their decision in that case.
 - If your user answers the grant form with deny, do not start that worker with
   those options; carry on without them or ask what they prefer.
 - **The same task three times is the end of it.** When a worker answers

@@ -85,5 +85,5 @@ and do not widen the sandbox.
 Two others are not breakage. `… is not registered yet` right after installing
 means the hooks register this session at its next prompt: have your user send
 any message, then retry; do not reinstall. A form tool can come back unseen by
-your user (Codex answers forms itself under `approval_policy = "never"` or
-auto-review); pass the result on as it is and do not call the tool again.
+your user (Codex declines forms unshown under `approval_policy = "never"`);
+pass the result on as it is and do not call the tool again.

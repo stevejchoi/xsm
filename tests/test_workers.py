@@ -574,6 +574,38 @@ class GrantTest(TempState):
         rec = channel.read(channel.resolve(here)[1])[-1]
         self.assertEqual((rec["tag"], rec["author"]["via"]), ("decision", "mcp-elicitation"))
 
+    def test_mcp_grant_records_a_refusal_only_when_a_person_chose(self):
+        """An error, a dismissal or a bare decline is nobody's decision; only a
+        chosen deny goes on record as the person's."""
+        import io
+        from xsm import channel, mcp
+        here = os.path.join(self.tmp, "proj")
+        os.makedirs(here)
+
+        def ask(reply):
+            msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                     "params": {"capabilities": {"elicitation": {}}}},
+                    {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                        "name": "xsm_grant", "arguments": {"runtime": "codex",
+                                                           "options": ["full_access"],
+                                                           "reason": "needs network"}}},
+                    dict({"jsonrpc": "2.0", "id": "xsm-1"}, **reply)]
+            out = io.StringIO()
+            server = mcp.Server(io.StringIO("".join(json.dumps(m) + "\n" for m in msgs)), out)
+            server.session = lambda: dict(self.ME, cwd=here)
+            server.serve()
+            return next(json.loads(l) for l in out.getvalue().splitlines()
+                        if json.loads(l).get("id") == 2)["result"]["content"][0]["text"]
+
+        for reply in ({"error": {"code": -1, "message": "boom"}},
+                      {"result": {"action": "cancel"}}, {"result": {"action": "decline"}}):
+            self.assertIn("do not start", ask(reply))
+            self.assertEqual(channel.read(channel.resolve(here)[1]), [], reply)
+        self.assertIn("they chose 'deny'",
+                      ask({"result": {"action": "accept", "content": {"answer": "deny"}}}))
+        rec = channel.read(channel.resolve(here)[1])[-1]
+        self.assertEqual((rec["tag"], rec["approved"]["answer"]), ("decision", "deny"))
+
 
 class DangerousFlagsTest(TempState):
     def test_pane_codex_flags(self):
@@ -864,6 +896,31 @@ class NoIdleWorkerTest(TempState):
         self.assertIn("Bash: npm test", ask["params"]["message"])
         self.assertEqual(paths.read_json(paths.path(workers.APPROVALS, "r1.json"))["status"],
                          "approved")
+
+    def test_mcp_approve_unanswered_points_to_the_terminal_not_another_call(self):
+        import io
+        from xsm import mcp, paths, workers
+        me = {"ref": "pppppp", "name": "boss", "alias": "claude-4", "runtime": "claude",
+              "cwd": self.tmp}
+        workers.save({"name": "w1", "parent_ref": "pppppp", "created": 0})
+        os.makedirs(paths.path(workers.APPROVALS), exist_ok=True)
+        paths.write_json(paths.path(workers.APPROVALS, "r1.json"),
+                         {"id": "r1", "worker": "w1", "status": "pending", "t": 1, "summary": "x"})
+        msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                 "params": {"capabilities": {"elicitation": {}}}},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                 "params": {"name": "xsm_approve", "arguments": {}}},
+                {"jsonrpc": "2.0", "id": "xsm-1", "result": {"action": "decline"}}]
+        out = io.StringIO()
+        server = mcp.Server(io.StringIO("".join(json.dumps(m) + "\n" for m in msgs)), out)
+        server.session = lambda: me
+        server.serve()
+        text = next(json.loads(l) for l in out.getvalue().splitlines()
+                    if json.loads(l).get("id") == 2)["result"]["content"][0]["text"]
+        self.assertIn("`xsm approve r1`", text)
+        self.assertNotIn("ask again", text)
+        self.assertEqual(paths.read_json(paths.path(workers.APPROVALS, "r1.json"))["status"],
+                         "pending")
 
     def test_a_workers_task_carries_the_no_excuse_rule(self):
         from xsm import envelope

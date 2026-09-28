@@ -170,6 +170,93 @@ class McpServerTest(TempState):
         self.assertEqual([(r["ref"], r["root"]) for r in config.reaches()],
                          [(AGENT["ref"], os.path.realpath(other))])
 
+    def _six(self, here):
+        """Each form tool, its arguments, the answer that would make it act, and
+        what it changed — so a reply can be checked against all six at once."""
+        from xsm import channel, config, doc, paths, workers
+        other = os.path.join(self.tmp, "other")
+        os.makedirs(other, exist_ok=True)
+        node = doc.add(os.path.join(here, "d.md"), AGENT, "the report", ["report"])
+        workers.save({"name": "w1", "parent_ref": AGENT["ref"], "created": 0})
+        os.makedirs(paths.path(workers.APPROVALS), exist_ok=True)
+        paths.write_json(paths.path(workers.APPROVALS, "r1.json"),
+                         {"id": "r1", "worker": "w1", "status": "pending", "t": 1, "summary": "x"})
+        decisions = lambda: [r for r in channel.read(channel.resolve(here)[1])
+                             if r["tag"] == "decision"]
+        grants = lambda: os.listdir(paths.path(workers.GRANTS)) \
+            if os.path.isdir(paths.path(workers.GRANTS)) else []
+        return [
+            ("xsm_decide", {"question": "Ship?", "options": ["yes", "no"]}, "yes", decisions),
+            ("xsm_doc_endorse", {"doc": "d.md", "node": node["id"]}, "endorse",
+             lambda: [n for n in doc.read(os.path.join(here, "d.md")) if "endorsed" in n["tags"]]),
+            ("xsm_join", {"project": "demo"}, "allow", config.projects),
+            ("xsm_reach", {"dir": other}, "allow", config.reaches),
+            ("xsm_approve", {"id": "r1"}, "allow",
+             lambda: [r for r in [paths.read_json(paths.path(workers.APPROVALS, "r1.json"))]
+                      if r["status"] != "pending"]),
+            ("xsm_grant", {"runtime": "codex", "options": ["full_access"], "reason": "r"},
+             "allow once", lambda: grants() + decisions()),
+        ]
+
+    def _ask(self, name, args, reply, cwd=None):
+        call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": name, "arguments": args}}
+        out, _ = self._run(self.INIT, call, dict({"jsonrpc": "2.0", "id": "xsm-1"}, **reply),
+                           cwd=cwd)
+        return next(m for m in out if m.get("id") == 2)["result"]["content"][0]["text"]
+
+    def test_an_answer_from_an_automatic_reviewer_changes_nothing(self):
+        here = os.path.join(self.tmp, "proj")
+        os.makedirs(here, exist_ok=True)
+        for name, args, yes, changed in self._six(here):
+            with self.subTest(name):
+                text = self._ask(name, args, {"result": {
+                    "action": "accept", "content": {"answer": yes},
+                    "_meta": {"approvals_reviewer": "auto_review"}}})
+                self.assertIn("automatic reviewer", text)
+                self.assertEqual(changed(), [])
+
+    def test_a_malformed_answer_is_no_answer_and_no_crash(self):
+        here = os.path.join(self.tmp, "proj")
+        os.makedirs(here, exist_ok=True)
+        replies = [{"result": {"action": "accept", "content": ["allow"]}},
+                   {"result": {"action": "accept", "content": {"answer": None}}},
+                   {"result": {"action": "accept", "content": {"answer": "  "}}},
+                   {"result": {"action": "accept", "content": {"answer": "maybe"}}},
+                   {"result": "accept"},
+                   {"result": {"action": "accept", "content": {}, "_meta": ["x"]}},
+                   {"error": "boom"}]
+        for name, args, _, changed in self._six(here):
+            for reply in replies:
+                with self.subTest(name, reply=reply):
+                    text = self._ask(name, args, reply)
+                    self.assertNotIn("None", text)
+                    self.assertEqual(changed(), [])
+
+    def test_a_join_denied_by_the_person_offers_no_command(self):
+        from xsm import config
+        deny = {"result": {"action": "accept", "content": {"answer": "deny"}}}
+        text = self._ask("xsm_join", {"project": "demo"}, deny)
+        self.assertIn("they chose 'deny'", text)
+        self.assertNotIn("xsm join", text)
+        self.assertNotIn("terminal", text)
+        self.assertEqual(config.projects(), [])
+
+    def test_the_terminal_command_names_the_folder_and_is_quoted(self):
+        import shlex
+        from xsm import config
+        here = os.path.join(self.tmp, "my proj")
+        text = self._ask("xsm_join", {"project": "demo"}, {"result": {"action": "decline"}},
+                         cwd=here)
+        root = config.project_root(here)
+        self.assertIn("`xsm join demo --dir %s`" % shlex.quote(root), text)
+        self.assertIn("approval_policy", text)
+        other = os.path.join(self.tmp, "other folder")
+        os.makedirs(other)
+        text = self._ask("xsm_reach", {"dir": other}, {"result": {"action": "cancel"}})
+        self.assertIn("`xsm reach %s --session ref:%s`" % (shlex.quote(other), AGENT["ref"]),
+                      text)
+
     def test_post_cannot_make_a_decision_and_needs_a_session(self):
         call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "xsm_post", "arguments": {"text": "we chose x", "tag": "decision"}}}
