@@ -177,13 +177,19 @@ class McpServerTest(TempState):
                          [(agent["ref"], os.path.realpath(other))])
 
     def _six(self, here):
-        """Each form tool, its arguments, the answer that would make it act, and
-        what it changed — so a reply can be checked against all six at once."""
-        from xsm import channel, config, doc, paths, workers
+        """The asking session, and each form tool with its arguments, the answer
+        that would make it act, and what it changed — so a reply can be checked
+        against all six at once. The session is a running record, so a reach
+        allowed here is really added (test_a_persons_choice_acts_in_all_six)."""
+        from xsm import channel, config, doc, paths, registry, workers
         other = os.path.join(self.tmp, "other")
         os.makedirs(other, exist_ok=True)
+        home = os.path.join(self.tmp, "homes", "codex")
+        os.makedirs(home, exist_ok=True)
+        rec = registry.upsert("codex", home, "t-six", os.getpid(), self.tmp, name="builder")
+        agent = dict(AGENT, ref=rec["ref"])
         node = doc.add(os.path.join(here, "d.md"), AGENT, "the report", ["report"])
-        workers.save({"name": "w1", "parent_ref": AGENT["ref"], "created": 0})
+        workers.save({"name": "w1", "parent_ref": agent["ref"], "created": 0})
         os.makedirs(paths.path(workers.APPROVALS), exist_ok=True)
         paths.write_json(paths.path(workers.APPROVALS, "r1.json"),
                          {"id": "r1", "worker": "w1", "status": "pending", "t": 1, "summary": "x"})
@@ -191,7 +197,7 @@ class McpServerTest(TempState):
                              if r["tag"] == "decision"]
         grants = lambda: os.listdir(paths.path(workers.GRANTS)) \
             if os.path.isdir(paths.path(workers.GRANTS)) else []
-        return [
+        return agent, [
             ("xsm_decide", {"question": "Ship?", "options": ["yes", "no"]}, "yes", decisions),
             ("xsm_doc_endorse", {"doc": "d.md", "node": node["id"]}, "endorse",
              lambda: [n for n in doc.read(os.path.join(here, "d.md")) if "endorsed" in n["tags"]]),
@@ -204,23 +210,67 @@ class McpServerTest(TempState):
              "allow once", lambda: grants() + decisions()),
         ]
 
-    def _ask(self, name, args, reply, cwd=None):
+    def _ask(self, name, args, reply, cwd=None, session=AGENT, init=None):
         call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                 "params": {"name": name, "arguments": args}}
-        out, _ = self._run(self.INIT, call, dict({"jsonrpc": "2.0", "id": "xsm-1"}, **reply),
-                           cwd=cwd)
+        out, _ = self._run(init or self.INIT, call,
+                           dict({"jsonrpc": "2.0", "id": "xsm-1"}, **reply),
+                           cwd=cwd, session=session)
         return next(m for m in out if m.get("id") == 2)["result"]["content"][0]["text"]
+
+    def test_a_persons_choice_acts_in_all_six(self):
+        # What makes the refusals below mean something: the same setup acts
+        # when the answer is a person's.
+        here = os.path.join(self.tmp, "proj")
+        os.makedirs(here, exist_ok=True)
+        agent, six = self._six(here)
+        for name, args, yes, changed in six:
+            with self.subTest(name):
+                self._ask(name, args, {"result": {"action": "accept", "content": {"answer": yes}}},
+                          session=agent)
+                self.assertNotEqual(changed(), [])
 
     def test_an_answer_from_an_automatic_reviewer_changes_nothing(self):
         here = os.path.join(self.tmp, "proj")
         os.makedirs(here, exist_ok=True)
-        for name, args, yes, changed in self._six(here):
+        agent, six = self._six(here)
+        for name, args, yes, changed in six:
             with self.subTest(name):
                 text = self._ask(name, args, {"result": {
                     "action": "accept", "content": {"answer": yes},
-                    "_meta": {"approvals_reviewer": "auto_review"}}})
+                    "_meta": {"approvals_reviewer": "auto_review"}}}, session=agent)
                 self.assertIn("automatic reviewer", text)
                 self.assertEqual(changed(), [])
+
+    def test_a_malformed_meta_is_no_answer_even_with_a_valid_choice(self):
+        # A _meta that is there but not an object says nothing about who
+        # answered; it was read as no _meta, and all six acted (2026-09-28).
+        here = os.path.join(self.tmp, "proj")
+        os.makedirs(here, exist_ok=True)
+        agent, six = self._six(here)
+        for name, args, yes, changed in six:
+            for meta in (["invalid"], "auto_review"):
+                with self.subTest(name, meta=meta):
+                    text = self._ask(name, args, {"result": {
+                        "action": "accept", "content": {"answer": yes}, "_meta": meta}},
+                        session=agent)
+                    self.assertIn("_meta", text)
+                    self.assertEqual(changed(), [])
+
+    def test_a_malformed_action_is_a_tool_result_not_a_dead_server(self):
+        # action=[] with an automatic reviewer raised TypeError past serve(),
+        # so the server exited without replying (2026-09-28).
+        here = os.path.join(self.tmp, "proj")
+        os.makedirs(here, exist_ok=True)
+        agent, six = self._six(here)
+        for name, args, yes, changed in six:
+            for action in ([], {}, None):
+                with self.subTest(name, action=action):
+                    text = self._ask(name, args, {"result": {
+                        "action": action, "content": {"answer": yes},
+                        "_meta": {"approvals_reviewer": "auto_review"}}}, session=agent)
+                    self.assertIn("not a form answer", text)
+                    self.assertEqual(changed(), [])
 
     def test_a_malformed_answer_is_no_answer_and_no_crash(self):
         here = os.path.join(self.tmp, "proj")
@@ -232,10 +282,11 @@ class McpServerTest(TempState):
                    {"result": "accept"},
                    {"result": {"action": "accept", "content": {}, "_meta": ["x"]}},
                    {"error": "boom"}]
-        for name, args, _, changed in self._six(here):
+        agent, six = self._six(here)
+        for name, args, _, changed in six:
             for reply in replies:
                 with self.subTest(name, reply=reply):
-                    text = self._ask(name, args, reply)
+                    text = self._ask(name, args, reply, session=agent)
                     self.assertNotIn("None", text)
                     self.assertEqual(changed(), [])
 
@@ -260,8 +311,80 @@ class McpServerTest(TempState):
         other = os.path.join(self.tmp, "other folder")
         os.makedirs(other)
         text = self._ask("xsm_reach", {"dir": other}, {"result": {"action": "cancel"}})
-        self.assertIn("`xsm reach %s --session ref:%s`" % (shlex.quote(other), AGENT["ref"]),
-                      text)
+        self.assertIn("`xsm reach %s --session ref:%s`" % (
+            shlex.quote(config.project_root(other)), AGENT["ref"]), text)
+
+    def test_the_reach_command_names_the_absolute_root_of_a_relative_dir(self):
+        # The person's terminal may be anywhere, so "../other folder" is named
+        # as the root the form showed, taken from the asking session's folder.
+        import shlex
+        from xsm import config
+        here = os.path.join(self.tmp, "proj")
+        other = os.path.join(self.tmp, "other folder")
+        os.makedirs(other)
+        command = "`xsm reach %s --session ref:%s`" % (
+            shlex.quote(config.project_root(other)), AGENT["ref"])
+        text = self._ask("xsm_reach", {"dir": "../other folder"},
+                         {"result": {"action": "decline"}}, cwd=here)
+        self.assertIn(command, text)
+        self.assertNotIn("..", text)
+        init = dict(self.INIT, params={"protocolVersion": "2025-06-18", "capabilities": {}})
+        call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "xsm_reach", "arguments": {"dir": "../other folder"}}}
+        out, _ = self._run(init, call, cwd=here)
+        self.assertIn(command, next(m for m in out if m.get("id") == 2)
+                      ["result"]["content"][0]["text"])
+
+    def test_a_bare_decline_names_codex_only_for_codex(self):
+        init = lambda name: dict(self.INIT, params=dict(self.INIT["params"],
+                                                        clientInfo={"name": name}))
+        decline = {"result": {"action": "decline"}}
+        text = self._ask("xsm_join", {"project": "demo"}, decline, init=init("codex-mcp-client"))
+        self.assertIn("by Codex without showing the form", text)
+        text = self._ask("xsm_join", {"project": "demo"}, decline, init=init("claude-code"))
+        self.assertIn("by the client without showing the form", text)
+        self.assertNotIn("Codex", text)
+        text = self._ask("xsm_join", {"project": "demo"}, decline)
+        self.assertIn("by the client without showing the form (Codex does this", text)
+
+    def test_decide_offers_options_as_they_are_compared(self):
+        # " yes " was offered as is and compared stripped, so the person's
+        # choice was refused (2026-09-28).
+        from xsm import channel
+        call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "xsm_decide", "arguments": {"question": "Ship?",
+                                                "options": [" yes ", "no", "yes", "  "]}}}
+        for chosen in ("yes", " yes "):
+            with self.subTest(chosen=chosen):
+                answer = {"jsonrpc": "2.0", "id": "xsm-1", "result": {
+                    "action": "accept", "content": {"answer": chosen}}}
+                out, here = self._run(self.INIT, call, answer)
+                elicit = next(m for m in out if m.get("method") == "elicitation/create")
+                self.assertEqual(elicit["params"]["requestedSchema"]["properties"]["answer"]
+                                 ["enum"], ["yes", "no"])
+                self.assertIn("recorded decision", next(m for m in out if m.get("id") == 2)
+                              ["result"]["content"][0]["text"])
+                rec = channel.read(channel.resolve(here)[1])[-1]
+                self.assertEqual(rec["approved"]["answer"], "yes")
+
+    def test_a_tool_that_fails_is_that_calls_error_not_the_servers_end(self):
+        from xsm import mcp
+        msgs = [self.INIT,
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                 "params": {"name": "xsm_post", "arguments": {"text": "x"}}},
+                {"jsonrpc": "2.0", "id": 3, "method": "tools/list"}]
+        out = io.StringIO()
+        server = mcp.Server(io.StringIO("".join(json.dumps(m) + "\n" for m in msgs)), out)
+        server.session = lambda: dict(AGENT, cwd=self.tmp)
+
+        def boom(*a):
+            raise TypeError("unhashable type: 'list'")
+        server._call = boom
+        self.assertEqual(server.serve(), 0)
+        replies = {m["id"]: m for m in map(json.loads, out.getvalue().splitlines())}
+        self.assertTrue(replies[2]["result"]["isError"])
+        self.assertIn("unhashable", replies[2]["result"]["content"][0]["text"])
+        self.assertIn("tools", replies[3]["result"])
 
     def test_post_cannot_make_a_decision_and_needs_a_session(self):
         call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
