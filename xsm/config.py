@@ -310,20 +310,28 @@ def projects() -> list:
     return [s for s in load().get("scopes", []) if any(m.get("root") for m in s.get("members", []))]
 
 
-def join(name: str, cwd: str):
-    """Add cwd's project folder to project `name`. Returns (scope, added)."""
+def check_join(name: str, raw: dict | None = None) -> dict | None:
+    """Raise ValueError when `name` cannot be joined; returns its scope, if any.
+    Checked before a typed consent is used up, so a bad name does not cost the
+    person their command (2026-09-28)."""
     if not PROJECT_NAME_RE.match(name or ""):
         raise ValueError("project names are letters, digits, '.', '_' and '-' (at most 64)")
-    root = project_root(cwd)
-    raw = _raw()
-    scopes = raw.setdefault("scopes", [])
-    scope = next((s for s in scopes if s.get("id") == name), None)
-    if scope is None:
-        scope = {"id": name, "members": []}
-        scopes.append(scope)
-    elif scope.get("members") and not any(m.get("root") for m in scope["members"]):
+    raw = _raw() if raw is None else raw
+    scope = next((s for s in raw.get("scopes") or [] if s.get("id") == name), None)
+    if scope and scope.get("members") and not any(m.get("root") for m in scope["members"]):
         # A hand-written scope with the same id: joining would quietly widen it.
         raise ValueError("scope %r is written by hand in config.json; edit it there" % name)
+    return scope
+
+
+def join(name: str, cwd: str):
+    """Add cwd's project folder to project `name`. Returns (scope, added)."""
+    raw = _raw()
+    scope = check_join(name, raw)
+    root = project_root(cwd)
+    if scope is None:
+        scope = {"id": name, "members": []}
+        raw.setdefault("scopes", []).append(scope)
     if any(os.path.realpath(m.get("root", "")) == root for m in scope["members"]):
         return scope, False
     scope["members"].append({"root": root})
@@ -362,7 +370,11 @@ def links() -> list:
     return list(load().get("links") or [])
 
 
-def _link_roots(folder_a: str, folder_b: str) -> tuple:
+def check_link(folder_a: str, folder_b: str) -> tuple:
+    """The two project roots, or ValueError when they cannot be linked. Checked
+    before a typed consent is used up: linking a folder not created yet used
+    the consent, and the retry after creating it asked with a form
+    (review, 2026-09-28)."""
     ra = project_root(os.path.expanduser(folder_a))
     rb = project_root(os.path.expanduser(folder_b))
     for folder, root in ((folder_a, ra), (folder_b, rb)):
@@ -380,7 +392,7 @@ def _same_link(entry: dict, ra: str, rb: str) -> bool:
 
 def add_link(folder_a: str, folder_b: str, by: str) -> tuple:
     """Link the projects of two folders. Returns (entry, added)."""
-    ra, rb = _link_roots(folder_a, folder_b)
+    ra, rb = check_link(folder_a, folder_b)
     raw = _raw()
     rows = raw.setdefault("links", [])
     for entry in rows:
@@ -390,6 +402,23 @@ def add_link(folder_a: str, folder_b: str, by: str) -> tuple:
     rows.append(entry)
     _save(raw)
     return entry, True
+
+
+def links_covering(root: str) -> list:
+    """(linked root, the other root) for each link that covers `root`: its own,
+    and those of a folder above it, which cover its sessions too (see
+    member_matches). Outside a repository a subfolder is a project of its own,
+    and `xsm projects` there said "no links" while its sessions were linked
+    (review, 2026-09-28)."""
+    root = os.path.realpath(root)
+    out = []
+    for ln in links():
+        a, b = os.path.realpath(ln.get("a") or ""), os.path.realpath(ln.get("b") or "")
+        for mine, other in ((a, b), (b, a)):
+            if root == mine or root.startswith(mine.rstrip("/") + "/"):
+                out.append((mine, other))
+                break
+    return out
 
 
 def drop_link(folder_a: str, folder_b: str) -> bool:
@@ -419,6 +448,15 @@ def reaches() -> list:
     return list(load().get("reaches") or [])
 
 
+def check_reach(folder: str) -> str:
+    """The folder's project root, or ValueError when there is none. Checked
+    before a typed consent is used up, as for a link."""
+    root = project_root(os.path.expanduser(folder))
+    if not os.path.isdir(root):
+        raise ValueError("%s is not a folder" % folder)
+    return root
+
+
 def add_reach(ref: str, folder: str, by: str, session: dict | None = None) -> tuple:
     """Let session `ref` talk with the sessions of `folder`'s project.
     Returns (entry, added).
@@ -427,9 +465,7 @@ def add_reach(ref: str, folder: str, by: str, session: dict | None = None) -> tu
     reach_holds), taken from `session` when the caller has its record, else
     from the one running record with that ref. Two running sessions sharing a
     ref cannot be told apart here, so that is refused rather than guessed."""
-    root = project_root(os.path.expanduser(folder))
-    if not os.path.isdir(root):
-        raise ValueError("%s is not a folder" % folder)
+    root = check_reach(folder)
     if session is None or not session.get("session_id") or "lstart" not in session:
         from . import registry          # lazy: registry imports this module
         running = [rec for rec in registry.records() if rec.get("ref") == ref

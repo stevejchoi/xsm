@@ -311,7 +311,12 @@ class Server:
                 # time, so a long block looks to the client like a dead server.
                 inbox.wait_for(me.get("session_id"), min(wait, inbox.MCP_MAX_WAIT))
             return "\n\n----\n\n".join(receive.take_inbox(me)) or "(no messages waiting)"
-        raise channel.ChannelError("unknown tool %s" % name)
+        # A client that loaded its tool list from a newer xsm than this server
+        # (the server reads TOOLS once, at its start) names a tool it lacks.
+        raise channel.ChannelError(
+            "unknown tool %s: this xsm server started before xsm was updated. Reconnect it (Claude "
+            "Code: /mcp, then xsm) or start a new session; meanwhile run the same `xsm` command "
+            "in the shell" % name)
 
     def decide(self, where: tuple, me: dict, args: dict) -> str:
         if "elicitation" not in (self.client_caps or {}):
@@ -405,6 +410,13 @@ class Server:
         if args.get("drop"):
             return ("unlinked %s and %s" % (root, other)) if config.drop_link(root, other) \
                 else "%s and %s were not linked" % (root, other)
+        # What can be checked is checked before the consent is used up: a
+        # folder not created yet used it, and the retry asked with a form
+        # (review, 2026-09-28).
+        try:
+            config.check_link(root, other)
+        except ValueError as exc:
+            raise channel.ChannelError(str(exc))
         if not consent.take(me, "link", other, here):
             command = "xsm link %s --dir %s" % (shlex.quote(other), shlex.quote(root))
             ok, refusal = self.allowed(
@@ -428,6 +440,11 @@ class Server:
         verb = "leave" if leaving else "join"
         # What the person can type instead; --dir names the folder asked about.
         command = "xsm %s %s --dir %s" % (verb, shlex.quote(project), shlex.quote(root))
+        if not leaving:
+            try:
+                config.check_join(project)      # before the consent is used up, as for link
+            except ValueError as exc:
+                raise channel.ChannelError(str(exc))
         if not consent.take(me, verb, project):       # the person typed /xsm join <project>
             ok, refusal = self.allowed(
                 "%s@%s asks to let %s %s the xsm project %r.%s\nAllow it?" % (
@@ -460,6 +477,10 @@ class Server:
             return "dropped %d reach(es)" % config.drop_reach(me.get("ref"), root, session=me)
         command = "xsm reach %s --session %s" % (shlex.quote(root),
                                                  shlex.quote("ref:%s" % me.get("ref")))
+        try:
+            config.check_reach(root)            # before the consent is used up, as for link
+        except ValueError as exc:
+            raise channel.ChannelError(str(exc))
         if not consent.take(me, "reach", root):        # the person typed /xsm reach <dir>
             ok, refusal = self.allowed(
                 "%s@%s (%s) asks to talk with the sessions in %s, both ways, until it ends.%s\n"

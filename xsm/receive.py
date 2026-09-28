@@ -118,7 +118,9 @@ def register(data: dict, runtime: str) -> dict | None:
                            name=data.get("session_title"),
                            mcp_pid=registry.beacon_for(pid) if runtime == "codex" else None,
                            socket=os.environ.get("CLAUDE_CODE_MESSAGING_SOCKET")
-                           if runtime == "claude" else None)
+                           if runtime == "claude" else None,
+                           inside=os.environ.get("CODEX_THREAD_ID" if runtime == "claude"
+                                                 else "CLAUDE_CODE_SESSION_ID") or None)
 
 
 def _emit(runtime: str, payload: dict | None) -> None:
