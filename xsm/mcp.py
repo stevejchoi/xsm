@@ -127,6 +127,41 @@ TOOLS = [
 ]
 
 
+def who_answered(reply: dict) -> str:
+    """Why a form did not come back as a person's choice, saying who answered.
+
+    Codex (0.158) answers forms itself in three cases: approval_policy "never"
+    (or a granular policy without MCP elicitations) declines every form unseen;
+    its auto-review decides in the user's place and marks `_meta`
+    approvals_reviewer; and a form it approves for itself comes back accepted
+    with no fields. A bare "your user did not allow it" read as a refusal
+    nobody had given (a tester's report, 2026-09-28)."""
+    if reply.get("error"):
+        return "the client returned an error: %s" % (reply["error"].get("message") or reply["error"])
+    result = reply.get("result") or {}
+    action = result.get("action") or "no answer"
+    meta = result.get("_meta") if isinstance(result.get("_meta"), dict) else {}
+    if meta.get("approvals_reviewer") not in (None, "user"):
+        note = next((v for k, v in meta.items() if k != "approvals_reviewer" and isinstance(v, str)),
+                    "")
+        return ("%s by Codex's automatic reviewer, not by your user%s; xsm counts only a "
+                "person's answer" % (action + ("ed" if action == "decline" else ""),
+                                     (": " + note) if note else ""))
+    answer = (result.get("content") or {}).get("answer") if isinstance(result.get("content"), dict) \
+        else None
+    if action == "accept" and answer:
+        return "they chose %r" % answer
+    if action == "accept":
+        return ("the form came back with no choice in it, so nobody picked one (a client that "
+                "approves forms by itself does this)")
+    if action == "decline":
+        return ("declined: by your user, or by Codex without showing a form when its "
+                "approval_policy is \"never\" or its granular policy turns MCP elicitations off")
+    if action == "cancel":
+        return "the form was dismissed"
+    return action
+
+
 class Server:
     def __init__(self, inp=sys.stdin, out=sys.stdout):
         self.inp, self.out = inp, out
@@ -169,8 +204,7 @@ class Server:
     def call(self, name: str, args: dict) -> str:
         me = self.session()
         if not me:
-            raise channel.ChannelError("this session is not registered with xsm; is the xsm hook "
-                                       "installed in its home?")
+            raise channel.ChannelError(registry.unregistered_reason())
         where = channel.resolve(me.get("cwd") or os.getcwd(), args.get("channel"))
         author = {"kind": "agent", "name": me.get("name"), "alias": me.get("alias"),
                   "ref": me.get("ref"), "runtime": me.get("runtime")}
@@ -236,8 +270,7 @@ class Server:
                                 "required": ["answer"]}})
         result = reply.get("result") or {}
         if result.get("action") != "accept":
-            return "your user did not answer (%s); nothing was recorded" % (
-                result.get("action") or (reply.get("error") or {}).get("message") or "no answer")
+            return "your user did not answer (%s); nothing was recorded" % who_answered(reply)
         answer = str((result.get("content") or {}).get("answer", "")).strip()
         if not answer:
             return "your user gave an empty answer; nothing was recorded"
@@ -271,7 +304,7 @@ class Server:
                 "required": ["answer"]}})
         result = reply.get("result") or {}
         if result.get("action") != "accept" or (result.get("content") or {}).get("answer") != "endorse":
-            return "your user did not endorse it; nothing was added"
+            return "your user did not endorse it (%s); nothing was added" % who_answered(reply)
         author = {"kind": "human", "name": os.environ.get("USER") or "person",
                   "via": "mcp-elicitation"}
         new = doc.add(path, author, node["body"], ["endorsed"], [node["id"]],
@@ -296,7 +329,8 @@ class Server:
             "required": ["answer"]}})
         result = reply.get("result") or {}
         if result.get("action") != "accept" or (result.get("content") or {}).get("answer") != "allow":
-            return "your user did not allow it; the folder's projects are unchanged"
+            return ("your user did not allow it (%s); the folder's projects are unchanged. They can "
+                    "run `xsm %s %s` in a terminal instead" % (who_answered(reply), verb, project))
         try:
             if leaving:
                 changed = config.leave(project, me.get("cwd") or os.getcwd())
@@ -330,7 +364,9 @@ class Server:
             "required": ["answer"]}})
         result = reply.get("result") or {}
         if result.get("action") != "accept" or (result.get("content") or {}).get("answer") != "allow":
-            return "your user did not allow it; do not work around it"
+            return ("your user did not allow it (%s); do not work around it. They can run "
+                    "`xsm reach %s --session ref:%s` in a terminal instead"
+                    % (who_answered(reply), folder, me.get("ref")))
         try:
             entry, added = config.add_reach(me.get("ref"), folder,
                                             os.environ.get("USER") or "person")
@@ -363,7 +399,7 @@ class Server:
             else None
         if answer not in (allow, deny):
             return ("your user did not answer (%s); the request is still waiting — ask again "
-                    "or tell them it is blocking the worker" % (result.get("action") or "no answer"))
+                    "or tell them it is blocking the worker" % who_answered(reply))
         workers.answer_asked(req["id"], answer == allow, me.get("ref"),
                              None if answer == allow else "your user said no")
         return "%s: worker %s's request [%s] %s" % (
@@ -408,7 +444,7 @@ class Server:
                       "options": [deny, allow]})
         if answer != allow:
             return "your user did not allow it (%s); do not start that worker" % (
-                answer or result.get("action") or "no answer")
+                answer if answer == deny else who_answered(reply))
         g = workers.create_grant(me.get("ref"), runtime, cwd, options, answer)
         return ("granted %s: xsm spawn %s --dir %s %s --grant %s   (one use, %d minutes)" % (
             g["id"], runtime, cwd, " ".join("--" + o.replace("_", "-") for o in options), g["id"],

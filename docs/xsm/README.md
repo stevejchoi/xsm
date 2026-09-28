@@ -378,6 +378,7 @@ xsm approvals | approve <id> | deny <id>
 | 원격 | SSH로 짝지은 프로젝트끼리 이미 떠 있는 세션에 보내는 것까지다([다른 기계의 세션](#다른-기계의-세션)). `xsm list`에 원격 세션이 나오지 않고, 채널·문서 공유와 원격 워커는 없다. 단위 테스트는 가짜 ssh로 도는 3건뿐이고, 실제 두 기계 전달은 수동으로만 확인했다. |
 | 채널·공동 문서 | 한 기계 안의 append-only 파일이다([채널](#채널), [공동 문서](#공동-문서)). 원격으로 공유되지 않고, 파일 잠금이 없어 동시 기록이 많은 규모(스웜)는 검증하지 않았다. |
 | 플랫폼 | macOS와 Linux만 된다. Unix 소켓, `ps`, `/dev/tty`, tmux 워커에 기댄다. 네이티브 Windows의 Claude inbox는 연결마다 auth 줄을 요구하는데 xsm은 보내지 않으므로 전달도 되지 않는다. |
+| Codex의 승인 양식 | `xsm_join`·`xsm_reach`·`xsm_grant` 같은 MCP 양식(elicitation)은 Codex가 사용자에게 보이지 않고 스스로 답할 때가 있다(0.158 소스 확인). `approval_policy = "never"`나 MCP elicitation을 끈 granular 정책이면 보이지 않고 거절하고, auto-review가 켜져 있으면 사용자 대신 판정한다. xsm은 사람이 고른 답만 받아들이고, 결과 문구에 누가 답했는지와 터미널에서 할 명령을 적는다. 그런 설정에서는 사람이 터미널에서 `xsm join`/`xsm reach`를 친다. |
 
 ## 상태 파일
 

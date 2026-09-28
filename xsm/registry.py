@@ -572,6 +572,23 @@ def _me(session_id: str | None, cwd: str | None) -> tuple:
     return None, "none:cwd-%d-live" % len(live)
 
 
+def unregistered_reason() -> str:
+    """What to tell a session that has no record. A Codex thread is registered
+    by its hooks at its next prompt, so right after installing or trusting
+    them the thread running the command is not known yet — "no hook record for
+    this cwd" read as a broken install (a tester's report, 2026-09-28)."""
+    why = self_consent(claude_home_here()) if os.environ.get("CLAUDE_CODE_SESSION_ID") else None
+    if why:
+        return "this session is not registered: %s" % why
+    thread = os.environ.get("CODEX_THREAD_ID")
+    if thread:
+        return ("this Codex thread (%s) is not registered yet: xsm's hooks register a thread at "
+                "its next prompt, so if they were just installed or trusted, send any message in "
+                "this session and try again; if it persists, run `xsm doctor`" % thread)
+    return ("this session is not registered: no hook record for it. If xsm was just installed, "
+            "send any message in the session first; otherwise run `xsm doctor`")
+
+
 def inbound_setting(home: str) -> str | None:
     """The receiver's own crossSessionInbound, read from its user settings.
 

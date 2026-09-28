@@ -127,6 +127,30 @@ class McpServerTest(TempState):
         self.assertIn("did not answer", reply["result"]["content"][0]["text"])
         self.assertEqual(channel.read(channel.resolve(here)[1]), [])
 
+    def test_a_refusal_says_who_answered(self):
+        from xsm import mcp
+        said = lambda result: mcp.who_answered({"result": result})
+        self.assertIn("automatic reviewer", said({"action": "decline", "_meta": {
+            "approvals_reviewer": "auto_review", "message": "looks risky"}}))
+        self.assertIn("looks risky", said({"action": "decline", "_meta": {
+            "approvals_reviewer": "auto_review", "message": "looks risky"}}))
+        self.assertIn("approval_policy", said({"action": "decline"}))
+        self.assertIn("no choice", said({"action": "accept", "content": {}}))
+        self.assertIn("'deny'", said({"action": "accept", "content": {"answer": "deny"}}))
+        self.assertIn("dismissed", said({"action": "cancel"}))
+
+    def test_a_join_answered_by_codex_itself_is_not_taken_for_the_user(self):
+        from xsm import config
+        call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "xsm_join", "arguments": {"project": "demo"}}}
+        auto = {"jsonrpc": "2.0", "id": "xsm-1", "result": {
+            "action": "accept", "content": {}, "_meta": {"approvals_reviewer": "auto_review"}}}
+        out, _ = self._run(self.INIT, call, auto)
+        text = next(m for m in out if m.get("id") == 2)["result"]["content"][0]["text"]
+        self.assertIn("automatic reviewer", text)
+        self.assertIn("xsm join demo", text)            # what the person can do instead
+        self.assertEqual(config.projects(), [])
+
     def test_reach_asks_the_person_and_records_only_an_allow(self):
         from xsm import config
         other = os.path.join(self.tmp, "other")
