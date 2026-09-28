@@ -481,7 +481,7 @@ def add_reach(ref: str, folder: str, by: str, session: dict | None = None) -> tu
         session = running[0]
     elif session.get("state") in ("ended", "stale"):
         raise ValueError("ref %s is not running (%s)" % (ref, session["state"]))
-    holder ={k: session.get(k) for k in ("runtime", "session_id", "pid", "lstart")}
+    holder = {k: session.get(k) for k in ("runtime", "session_id", "pid", "lstart")}
     holder["session_id"] = str(holder["session_id"])
     holder["home"] = os.path.realpath(session.get("home") or "")
     raw = _raw()
