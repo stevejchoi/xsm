@@ -127,6 +127,25 @@ class McpServerTest(TempState):
         self.assertIn("did not answer", reply["result"]["content"][0]["text"])
         self.assertEqual(channel.read(channel.resolve(here)[1]), [])
 
+    def test_reach_asks_the_person_and_records_only_an_allow(self):
+        from xsm import config
+        other = os.path.join(self.tmp, "other")
+        os.makedirs(other)
+        call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "xsm_reach", "arguments": {"dir": other, "reason": "hand over a task"}}}
+        deny = {"jsonrpc": "2.0", "id": "xsm-1", "result": {"action": "accept",
+                                                            "content": {"answer": "deny"}}}
+        out, _ = self._run(self.INIT, call, deny)
+        self.assertIn("other", next(m for m in out if m.get("method") == "elicitation/create")
+                      ["params"]["message"])
+        self.assertEqual(config.reaches(), [])
+        allow = dict(deny, result={"action": "accept", "content": {"answer": "allow"}})
+        out, _ = self._run(self.INIT, call, allow)
+        self.assertIn("allowed", next(m for m in out if m.get("id") == 2)
+                      ["result"]["content"][0]["text"])
+        self.assertEqual([(r["ref"], r["root"]) for r in config.reaches()],
+                         [(AGENT["ref"], os.path.realpath(other))])
+
     def test_post_cannot_make_a_decision_and_needs_a_session(self):
         call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "xsm_post", "arguments": {"text": "we chose x", "tag": "decision"}}}

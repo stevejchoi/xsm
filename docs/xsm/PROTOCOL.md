@@ -107,7 +107,7 @@ CODEX_HOME=<대상 홈> codex queue --thread <thread-uuid> --message <봉투 전
 |---|---|
 | `mcp/<pid>.json` | `{"pid", "ppid", "lstart", "started", "cwd"}`: 실행 중인 xsm MCP 서버의 비콘(§4.3). 서버가 끝나면 지우고, 죽은 pid의 비콘은 읽을 때 정리한다 |
 | `inbox/<thread-uuid>/<id>.json` | `{"id", "t", "content"}`: Codex 대상 메시지의 봉투 사본(§2.2). 어느 경로로든 넘겨지면 지우고, 읽히지 않은 사본은 세션 포인터 보존 기간이 지나면 정리한다 |
-| `config.json` | `{"strict_peers": bool, "same_repo_scope": bool, "retention_days": number, "ledger_retention_days": number, "telemetry_retention_days": number, "scopes": [{"id": str, "members": [{"runtime": str?, "home": str?, "cwd": glob?, "root": path?}]}]}`. `root`는 `xsm join`이 쓰는 구성원으로, 그 폴더와 그 아래 전부와 맞는다 |
+| `config.json` | `{"strict_peers": bool, "same_repo_scope": bool, "retention_days": number, "ledger_retention_days": number, "telemetry_retention_days": number, "scopes": [{"id": str, "members": [{"runtime": str?, "home": str?, "cwd": glob?, "root": path?}]}], "reaches": [{"ref": str, "root": path, "t": number, "by": str}]}`. `root`는 `xsm join`이 쓰는 구성원으로, 그 폴더와 그 아래 전부와 맞는다 |
 | `interpreter` | `{"path": str, "version": str}`. 훅이 실행될 인터프리터 절대 경로. `xsm install --python`이 쓴다 |
 | `homes.json` | `[{"path": str, "runtime": "claude"\|"codex", "alias": str}]` |
 | `sessions/<runtime>-<session-id>.json` | `{"runtime", "home", "alias", "session_id", "pid", "lstart", "cwd", "ref", "updated", "permission_mode"?, "name"?, "ended_at"?, "end_reason"?}` |
@@ -294,6 +294,7 @@ Claude는 우리 훅보다 **먼저** 자체 판정을 한다. 구현은 보내�
 - 두 세션은 **각자의 폴더가 같은 프로젝트의 구성원일 때만** 그 scope를 공유한다. 한쪽의 가입만으로는 열리지 않는다.
 - 이름은 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`이다. `root` 구성원이 없는 손으로 쓴 scope와 이름이 겹치면 가입을 거부한다.
 - 가입이 한쪽뿐이라 거부될 때 이유 문구에 가입하지 않은 폴더와 필요한 명령을 붙인다.
+- **reach.** `config.json`의 `reaches: [{"ref", "root", "t", "by"}]`. 세션 `ref`와, 시작 폴더가 `root`(대상 폴더의 git 루트, 없으면 그 폴더) 아래인 세션들은 공통 scope가 없어도 `reach:<ref>` scope로 양방향 통한다. 그 세션의 같은 프로젝트 동료나 `root` 밖 세션에는 열리지 않는다. 넓히는 일이라 사람만 허락한다: CLI `xsm reach <폴더> --session <ref>`는 `human_terminal()`일 때만, 세션에서는 MCP `xsm_reach`가 elicitation으로 묻는다. 거두기(`--drop`, `drop: true`)는 누구나 한다. 그 세션이 `live`/`unknown`이 아니게 되면 정리(`xsm prune`, 매시간)가 지운다. 범위 밖 거부 문구 끝에 이 방법을 붙인다.
 - 워커와 그 워커를 띄운 세션(워커 기록의 `ref`와 `parent_ref`)은 공통 scope가 없어도 `worker:<워커 이름>` scope로 통한다. 범위 밖 폴더의 워커는 사람이 허가했을 때만 뜨므로(5.5), 이 짝에 대한 동의는 이미 있다. 워커와 그 폴더의 다른 세션, 부모와 그 폴더의 다른 세션은 위 규칙을 그대로 따른다.
 - 가입과 탈퇴는 사용자의 결정이고 xsm이 강제한다(ADR-0009). CLI `join`/`leave`는 `human_terminal()`일 때만 동작한다. 세션에서는 MCP `xsm_join`이 elicitation(`allow`/`deny`)으로 묻고, 허용될 때만 가입한다. `--dir`는 `join`, `leave`, `post`에서 사람 터미널일 때만 받는다.
 

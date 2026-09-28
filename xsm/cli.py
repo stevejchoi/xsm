@@ -346,6 +346,46 @@ def _memberships(here: str) -> list:
     return ["%s (default)" % default] + named
 
 
+def cmd_reach(args) -> int:
+    """Let one running session talk with the sessions of one other folder."""
+    if args.session:
+        found = resolve.resolve(args.session)
+        me = found.record if found.ok else None
+        if me is None:
+            print("refused: %s" % (found.reason or "no such session: %s" % args.session),
+                  file=sys.stderr)
+            return REFUSED
+    else:
+        me = registry.me()
+    if not args.folder and not args.drop:
+        rows = config.reaches()
+        if not rows:
+            print("no reaches")
+        for r in rows:
+            print("ref:%s -> %s" % (r.get("ref"), _home_tilde(r.get("root", ""))))
+        return OK
+    if not me or not me.get("ref"):
+        print("refused: which session? name it with --session ref:xxxxxx", file=sys.stderr)
+        return USAGE
+    if args.drop:
+        n = config.drop_reach(me["ref"], args.folder)
+        print("dropped %d reach(es) of ref:%s" % (n, me["ref"]))
+        return OK
+    why = _person_or_refuse("letting a session reach another folder", "xsm_reach")
+    if why:
+        print("refused: %s" % why, file=sys.stderr)
+        return REFUSED
+    try:
+        entry, added = config.add_reach(me["ref"], args.folder, os.environ.get("USER") or "person")
+    except ValueError as exc:
+        print("refused: %s" % exc, file=sys.stderr)
+        return USAGE
+    print("%s: %s@%s [%s] can talk with the sessions in %s while it runs" % (
+        "allowed" if added else "already allowed", me.get("name"), me.get("alias"), me["ref"],
+        _home_tilde(entry["root"])))
+    return OK
+
+
 def cmd_block(args) -> int:
     if args.command == "unblock":
         why = _person_or_refuse("lifting a block", "no")
@@ -1472,6 +1512,12 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--reason")
         sp.set_defaults(func=cmd_answer)
 
+    rc = sub.add_parser("reach", help="let one session talk with the sessions of another folder "
+                                      "while it runs (a person only); no folder: list them")
+    rc.add_argument("folder", nargs="?")
+    rc.add_argument("--session", help="the session to allow (default: the one running this)")
+    rc.add_argument("--drop", action="store_true", help="take the reach away (all, if no folder)")
+    rc.set_defaults(func=cmd_reach)
     for verb, helptext in (("block", "stop one session from sending or receiving"),
                            ("unblock", "lift a block (a person only)")):
         bp = sub.add_parser(verb, help=helptext)

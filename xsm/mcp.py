@@ -90,6 +90,15 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "project": {"type": "string"}, "leave": {"type": "boolean", "default": False},
          "reason": {"type": "string"}}, "required": ["project"]}},
+    {"name": "xsm_reach",
+     "description": ("Ask your user to let this session talk with the sessions of one other "
+                     "folder (both ways, while this session runs), when a send is refused as out "
+                     "of scope. Narrower than joining a project: nothing else changes. This "
+                     "shows them a form; drop=true takes it back without asking."),
+     "inputSchema": {"type": "object", "properties": {
+         "dir": {"type": "string", "description": "the other folder, e.g. ~/src/other-repo"},
+         "drop": {"type": "boolean", "default": False},
+         "reason": {"type": "string"}}, "required": ["dir"]}},
     {"name": "xsm_doc_endorse",
      "description": ("Ask your user to endorse a node of a shared document (xsm doc), making it "
                      "the document's canonical text when rendered. They see the node and decide."),
@@ -190,6 +199,8 @@ class Server:
             return self.approve(me, args)
         if name == "xsm_join":
             return self.join(me, args)
+        if name == "xsm_reach":
+            return self.reach(me, args)
         if name == "xsm_send":
             from . import send as send_mod
             r = send_mod.send(args.get("target") or "", args.get("text") or "", sender=me,
@@ -296,6 +307,37 @@ class Server:
         others = [m["root"] for m in scope["members"] if os.path.realpath(m["root"]) != root]
         return "%s %s; other members: %s" % ("joined" if added else "already in", project,
                                              ", ".join(others) or "none yet")
+
+    def reach(self, me: dict, args: dict) -> str:
+        from . import config
+        folder = os.path.expanduser(args.get("dir") or "")
+        if not folder:
+            raise channel.ChannelError("dir: the folder to reach")
+        if args.get("drop"):
+            return "dropped %d reach(es)" % config.drop_reach(me.get("ref"), folder)
+        if "elicitation" not in (self.client_caps or {}):
+            raise channel.ChannelError("this client cannot ask its user; they can run "
+                                       "`xsm reach %s --session ref:%s` in a terminal"
+                                       % (folder, me.get("ref")))
+        root = config.project_root(folder)
+        question = ("%s@%s (%s) asks to talk with the sessions in %s, both ways, until it "
+                    "ends.%s\nAllow it?" % (
+                        me.get("name"), me.get("alias"), me.get("ref"), root,
+                        ("\nReason: " + args["reason"]) if args.get("reason") else ""))
+        reply = self.ask_client("elicitation/create", {"message": question, "requestedSchema": {
+            "type": "object", "properties": {"answer": {"type": "string", "title": "Permission",
+                                                        "enum": ["allow", "deny"]}},
+            "required": ["answer"]}})
+        result = reply.get("result") or {}
+        if result.get("action") != "accept" or (result.get("content") or {}).get("answer") != "allow":
+            return "your user did not allow it; do not work around it"
+        try:
+            entry, added = config.add_reach(me.get("ref"), folder,
+                                            os.environ.get("USER") or "person")
+        except ValueError as exc:
+            raise channel.ChannelError(str(exc))
+        return "%s: this session can now talk with the sessions in %s; run `xsm list` to see them" % (
+            "allowed" if added else "already allowed", entry["root"])
 
     def approve(self, me: dict, args: dict) -> str:
         from . import workers

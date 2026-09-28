@@ -176,6 +176,10 @@ def _gate_case(case):
         records = self.records_by_session(case["sessions"])
         receiver = records[case["receiver"]]
         message = case["message"]
+        for r in case.get("reaches", []):
+            from xsm import config
+            os.makedirs(self.fill(r["dir"]), exist_ok=True)
+            config.add_reach(records[r["session"]]["ref"], self.fill(r["dir"]), "vector")
         for w in case.get("workers", []):
             from xsm import workers
             workers.save({"name": w["name"], "ref": records[w["session"]]["ref"],

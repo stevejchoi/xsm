@@ -113,7 +113,7 @@ $xsm list                            # Codex
 /xsm send ref:a1b2c3 please take a look   # everything after the target is the message
 ```
 
-The commands are `list`, `who`, `log`, `projects`, `doctor`, `send`, `join` and `leave`. Called with no
+The commands are `list`, `who`, `log`, `projects`, `doctor`, `send`, `join`, `leave` and `reach`. Called with no
 command, it prints a one-line usage. If you ask in words ("ask the other session"), the agent reads the
 skill's guide and runs `xsm` itself.
 
@@ -125,6 +125,13 @@ under the same name.
 ```bash
 xsm join my-project                  # run on each side
 xsm projects                         # which folders are joined
+```
+
+To let just one session talk with the sessions of another folder, without joining anything,
+your user allows a reach. It lasts until that session ends.
+
+```bash
+xsm reach ~/src/other-repo --session ref:a1b2c3   # in a terminal; in a session: /xsm reach <folder>
 ```
 
 ### Sending messages

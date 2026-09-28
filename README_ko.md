@@ -108,7 +108,7 @@ $xsm list                            # Codex
 /xsm send ref:a1b2c3 이것 좀 봐줘      # 대상 다음은 모두 메시지
 ```
 
-명령은 `list`, `who`, `log`, `projects`, `doctor`, `send`, `join`, `leave`입니다. 인자 없이 부르면
+명령은 `list`, `who`, `log`, `projects`, `doctor`, `send`, `join`, `leave`, `reach`입니다. 인자 없이 부르면
 사용법 한 줄이 나옵니다. 말로 부탁하면("저쪽 세션에 물어봐") 에이전트가 같은 스킬의 참고 문서를 읽고
 직접 `xsm`을 실행합니다.
 
@@ -119,6 +119,12 @@ $xsm list                            # Codex
 ```bash
 xsm join my-project                  # 양쪽에서 각각 실행
 xsm projects                         # 어떤 폴더들이 묶여 있는지
+```
+
+가입 없이 한 세션만 다른 폴더의 세션들과 통하게 하려면 사용자가 reach를 허락합니다. 그 세션이 끝나면 사라집니다.
+
+```bash
+xsm reach ~/src/other-repo --session ref:a1b2c3   # 터미널에서. 세션 안에서는 /xsm reach <폴더>
 ```
 
 ### 메시지 송신

@@ -93,8 +93,15 @@ def prune(now: float | None = None, dry_run: bool = False) -> dict:
             if not dry_run:
                 _unlink(p)
 
+    # A reach lasts as long as the session that was allowed it.
+    from . import config, registry
+    running = {r.get("ref") for r in registry.records() if r.get("state") in ("live", "unknown")}
+    removed["reaches"] = [r for r in config.reaches() if r.get("ref") not in running]
     if not dry_run:
-        from . import registry
+        for r in removed["reaches"]:
+            config.drop_reach(r["ref"], r.get("root"))
+
+    if not dry_run:
         registry.mcp_beacons()          # drops beacons of MCP servers that are gone
         _touch(paths.path(STAMP))
     return removed

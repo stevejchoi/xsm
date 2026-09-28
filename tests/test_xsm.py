@@ -122,6 +122,32 @@ class ScopeTest(TempState):
         self.assertIsNone(config.scope_for(parent, neighbour)[0])
         self.assertIsNotNone(config.scope_for(worker, neighbour)[0])   # same folder, as before
 
+    def test_a_reach_opens_one_session_to_one_folder_both_ways(self):
+        from xsm import config
+        me = {"cwd": os.path.join(self.tmp, "a"), "runtime": "claude", "ref": "r1", "state": "live"}
+        mate = {"cwd": os.path.join(self.tmp, "a"), "runtime": "claude", "ref": "r2"}
+        there = {"cwd": os.path.join(self.tmp, "b", "sub"), "runtime": "codex", "ref": "t1"}
+        elsewhere = {"cwd": os.path.join(self.tmp, "c"), "runtime": "codex", "ref": "e1"}
+        for d in ("a", "b/sub", "c"):
+            os.makedirs(os.path.join(self.tmp, d), exist_ok=True)
+        self.assertIsNone(config.scope_for(me, there)[0])
+        self.assertIn("xsm_reach", config.scope_for(me, there)[1])
+        config.add_reach("r1", os.path.join(self.tmp, "b"), "tester")
+        self.assertEqual(config.scope_for(me, there)[0], "reach:r1")
+        self.assertEqual(config.scope_for(there, me)[0], "reach:r1")      # the reply
+        self.assertIsNone(config.scope_for(mate, there)[0])              # only that session
+        self.assertIsNone(config.scope_for(me, elsewhere)[0])            # only that folder
+        self.assertEqual(config.drop_reach("r1"), 1)
+        self.assertIsNone(config.scope_for(me, there)[0])
+
+    def test_a_reach_goes_when_its_session_does(self):
+        from xsm import config, housekeeping
+        os.makedirs(os.path.join(self.tmp, "b"), exist_ok=True)
+        config.add_reach("gone00", os.path.join(self.tmp, "b"), "tester")
+        removed = housekeeping.prune()
+        self.assertEqual([r["ref"] for r in removed["reaches"]], ["gone00"])
+        self.assertEqual(config.reaches(), [])
+
     def test_no_worker_link_without_refs(self):
         from xsm import config, workers
         workers.save({"name": "early", "ref": None, "parent_ref": None})

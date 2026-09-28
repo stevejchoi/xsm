@@ -16,6 +16,7 @@ import json
 import os
 import re
 import subprocess
+import time
 
 from . import paths
 
@@ -122,7 +123,33 @@ def scope_for(a: dict, b: dict, cfg: dict | None = None):
     link = _worker_link(a, b)
     if link:
         return link, "a worker and the session that started it"
-    return None, reason + _half_joined(a, b, cfg)
+    link = _reach_link(a, b, cfg)
+    if link:
+        return link, "a reach your user allowed"
+    return None, reason + _half_joined(a, b, cfg) + _reach_hint(a, b)
+
+
+def _reach_link(a: dict, b: dict, cfg: dict) -> str | None:
+    """One session allowed by a person to talk with the sessions of one other
+    folder, both ways, for as long as it runs (`xsm reach`). The folder's
+    other sessions and the rest of the reaching session's project follow the
+    usual rules; the id names the reaching session, so both sides compute it.
+    Whether that session still runs is not asked here: a stopped session can
+    neither send nor receive, and housekeeping drops its reaches."""
+    for r in cfg.get("reaches") or []:
+        for mine, other in ((a, b), (b, a)):
+            if mine.get("ref") and mine.get("ref") == r.get("ref") and \
+                    member_matches({"root": r.get("root")}, other):
+                return "reach:%s" % r["ref"]
+    return None
+
+
+def _reach_hint(a: dict, b: dict) -> str:
+    if not (a.get("ref") and b.get("cwd")):
+        return ""
+    return ("; or your user can let this session reach %s (xsm_reach, or `xsm reach %s "
+            "--session ref:%s` in a terminal)" % (project_root(b["cwd"]), project_root(b["cwd"]),
+                                                  a["ref"]))
 
 
 def _worker_link(a: dict, b: dict) -> str | None:
@@ -259,6 +286,50 @@ def leave(name: str, cwd: str) -> bool:
         _save(raw)
         return True
     return False
+
+
+# --- reaches: one session to one other folder -----------------------------------------
+#
+# Joining a project opens two folders to each other for good. A reach is
+# narrower: one running session and the sessions of one folder, for as long as
+# that session runs. It widens who may talk, so only a person grants it; it
+# narrows when dropped, so anyone may drop it (2026-09-28).
+
+def reaches() -> list:
+    return list(load().get("reaches") or [])
+
+
+def add_reach(ref: str, folder: str, by: str) -> tuple:
+    """Let session `ref` talk with the sessions of `folder`'s project.
+    Returns (entry, added)."""
+    root = project_root(os.path.expanduser(folder))
+    if not os.path.isdir(root):
+        raise ValueError("%s is not a folder" % folder)
+    raw = _raw()
+    rows = raw.setdefault("reaches", [])
+    for r in rows:
+        if r.get("ref") == ref and os.path.realpath(r.get("root", "")) == root:
+            return r, False
+    entry = {"ref": ref, "root": root, "t": time.time(), "by": by}
+    rows.append(entry)
+    _save(raw)
+    return entry, True
+
+
+def drop_reach(ref: str, folder: str | None = None) -> int:
+    """Remove session `ref`'s reach to `folder`, or all of its reaches."""
+    root = project_root(os.path.expanduser(folder)) if folder else None
+    raw = _raw()
+    rows = raw.get("reaches") or []
+    kept = [r for r in rows if r.get("ref") != ref or
+            (root and os.path.realpath(r.get("root", "")) != root)]
+    if len(kept) == len(rows):
+        return 0
+    raw["reaches"] = kept
+    if not kept:
+        raw.pop("reaches")
+    _save(raw)
+    return len(rows) - len(kept)
 
 
 # --- blocked sessions (ADR-0009) ------------------------------------------------------
