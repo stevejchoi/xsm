@@ -464,12 +464,26 @@ def unregistered() -> list:
     return out
 
 
-def mark_ended(runtime: str, session_id: str, reason: str | None) -> dict | None:
+def mark_ended(runtime: str, session_id: str, reason: str | None,
+               home: str | None = None) -> dict | None:
     """Record a clean exit. Only the SessionEnd hook calls this; a crash never
-    does, which is exactly how `ended` and `stale` come apart."""
+    does, which is exactly how `ended` and `stale` come apart.
+
+    `home` is where the ending session lives. Pointers are keyed on runtime
+    and session id alone, so a thread id that exists in two CODEX_HOMEs (a
+    copied home) names one pointer; a goodbye from the other home used to mark
+    it ended and drop its reaches while it ran on (2026-09-28). A goodbye whose
+    home is not the pointer's leaves the pointer alone."""
     p = _record_path(runtime, session_id)
     rec = paths.read_json(p)
     if not rec:
+        return None
+    if home and os.path.realpath(os.path.expanduser(home)) != \
+            os.path.realpath(rec.get("home") or ""):
+        paths.append_jsonl("decisions.jsonl", {
+            "event": "SessionEnd", "runtime": runtime, "decision": "end-ignored",
+            "reason": "the goodbye came from %s, the pointer is for %s" % (home, rec.get("home")),
+            "session_id": session_id})
         return None
     rec["ended_at"] = time.time()
     rec["end_reason"] = reason or "unknown"

@@ -186,5 +186,79 @@ print(remote.add("hostB", "demo", here=%r)["peer"])""" % self.m["hostA"]["proj"]
         self.assertIn("not in project demo", out["reason"])
 
 
+class IngressStateTest(unittest.TestCase):
+    """The receiving side alone, in process: a message from a paired peer to a
+    local session that has stopped is refused, as a local send would be. It
+    used to be queued for nobody and reported to the peer as queued
+    (2026-09-28)."""
+
+    def setUp(self):
+        from unittest import mock
+        self.tmp = tempfile.mkdtemp(prefix="xsm-ingress-")
+        self.env = mock.patch.dict(os.environ, {"XSM_HOME": self.tmp})
+        self.env.start()
+        sys.path.insert(0, REPO)
+        for mod in [m for m in list(sys.modules) if m.startswith("xsm")]:
+            del sys.modules[mod]
+        from xsm import config, paths, registry
+        paths.HOME = self.tmp
+        paths.ensure_home()
+        registry._running_codex = lambda: []
+        self.proj = os.path.join(self.tmp, "proj")
+        os.makedirs(self.proj)
+        config.join("demo", self.proj)
+        raw = config._raw()
+        raw["remotes"] = [{"peer": "hostA", "host": "hostA", "local_project": "demo",
+                           "remote_project": "demo", "added": 0}]
+        config._save(raw)
+
+    def tearDown(self):
+        self.env.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _codex(self, sid, pid):
+        from xsm import registry
+        home = os.path.join(self.tmp, "homes", "codex")
+        os.makedirs(home, exist_ok=True)
+        registry.upsert("codex", home, sid, pid, self.proj, name=sid)
+        return registry.by_session("codex", sid)
+
+    def _dead_pid(self):
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        p.wait()
+        return p.pid
+
+    def _request(self, target):
+        return {"op": "send", "project": "demo", "target": target, "id": "m-%s" % target,
+                "body": "hi", "kind": "note",
+                "sender": {"name": "agent", "alias": "claude", "ref": "aaaaaa"}}
+
+    def test_ended_and_stale_targets_are_refused_without_delivery(self):
+        from unittest import mock
+        from xsm import adapters, ledger, registry, remote
+        self._codex("gone", self._dead_pid())
+        registry.mark_ended("codex", "gone", "prompt_input_exit")
+        self._codex("crashed", self._dead_pid())
+
+        def called(*args, **kw):
+            raise AssertionError("an adapter was called for a stopped target")
+        with mock.patch.multiple(adapters, to_claude=called, to_codex=called):
+            for sid, state in (("gone", "ended"), ("crashed", "stale")):
+                reply = remote._serve("hostA", self._request("codex:%s" % sid))
+                self.assertEqual(reply["status"], "refused", reply)
+                self.assertIn("is not running (%s)" % state, reply["error"])
+        self.assertEqual(ledger.recent(), [], "nothing was recorded as queued")
+
+    def test_a_live_target_is_still_delivered(self):
+        from unittest import mock
+        from xsm import adapters, remote
+        self._codex("alive", os.getpid())
+        sent = []
+        with mock.patch.object(adapters, "to_codex", lambda *a: sent.append(a[1])):
+            reply = remote._serve("hostA", self._request("codex:alive"))
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(sent, ["alive"])
+
+
 if __name__ == "__main__":
     unittest.main()

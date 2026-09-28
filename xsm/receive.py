@@ -65,6 +65,17 @@ def home_of(runtime: str, data: dict) -> str | None:
     return tp[:tp.index(marker)] if marker in tp else os.path.expanduser("~/.codex")
 
 
+def stated_home(runtime: str, data: dict) -> str | None:
+    """home_of, but only when the hook says it: the runtime's home variable or
+    its transcript's location. None where home_of would fall back to the
+    default folder, which is a guess and must not overrule a pointer's home."""
+    env = "CLAUDE_CONFIG_DIR" if runtime == "claude" else "CODEX_HOME"
+    marker = "/projects/" if runtime == "claude" else "/sessions/"
+    if os.environ.get(env) or marker in (data.get("transcript_path") or ""):
+        return home_of(runtime, data)
+    return None
+
+
 def pid_of(runtime: str) -> int | None:
     if runtime == "claude":
         pid = identity.pid_from_socket(os.environ.get("CLAUDE_CODE_MESSAGING_SOCKET", ""))
@@ -187,7 +198,8 @@ def _handle(data: dict) -> dict | None:
     if data.get("hook_event_name") == "SessionEnd":
         # Do not re-register on the way out; just note the goodbye.
         if data.get("session_id"):
-            ended = registry.mark_ended(runtime, data["session_id"], data.get("reason"))
+            ended = registry.mark_ended(runtime, data["session_id"], data.get("reason"),
+                                        home=stated_home(runtime, data))
             workers.reap_detached(ended)    # its workers have nobody to report to now
             if ended and ended.get("ref"):
                 # A reach lasts until its session ends. Waiting for the hourly

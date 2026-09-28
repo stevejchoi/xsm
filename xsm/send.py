@@ -96,15 +96,9 @@ def _send(target_spec: str, body: str, *, sender: dict | None = None, kind: str 
 
     if not target.get("registered"):
         return SendResult("refused", "target has no hook record, so it cannot be addressed")
-    if target.get("state") in ("ended", "stale"):
-        # Names resolve to live sessions only, but ref:, claude: and codex:
-        # name one session exactly and used to reach a stopped one too; the
-        # queue then held the message for nobody, and a reach granted to that
-        # session looked usable (2026-09-28). `unknown` stays sendable: it is
-        # a session whose liveness could not be checked, not a dead one.
-        return SendResult("refused", "%s@%s [%s] is not running (%s)%s" % (
-            target.get("name"), target.get("alias"), target.get("ref"), target.get("state"),
-            "\n" + resolve.resume_hint(target)), target=target)
+    stopped = not_running(target)
+    if stopped:
+        return SendResult("refused", stopped + "\n" + resolve.resume_hint(target), target=target)
     if target.get("ref") == sender.get("ref"):
         return SendResult("refused", "refusing to send to yourself")
     blocked = config.blocked()
@@ -170,6 +164,21 @@ def _send(target_spec: str, body: str, *, sender: dict | None = None, kind: str 
     elif forecast == "unknown":
         note = "queued; %s, so the receiver's own gate may hold it" % why
     return SendResult("sent-unconfirmed", note, msg_id, target)
+
+
+def not_running(target: dict) -> str | None:
+    """Why a message must not go to `target` because it stopped, or None.
+
+    Names resolve to live sessions only, but ref:, claude: and codex: name one
+    session exactly and used to reach a stopped one too; the queue then held
+    the message for nobody, and a reach granted to that session looked usable
+    (2026-09-28). `unknown` stays sendable: it is a session whose liveness
+    could not be checked, not a dead one. Shared with remote ingress, which
+    delivered to a stopped session for the same reason."""
+    if target.get("state") in ("ended", "stale"):
+        return "%s@%s [%s] is not running (%s)" % (
+            target.get("name"), target.get("alias"), target.get("ref"), target.get("state"))
+    return None
 
 
 def sandboxed() -> bool:

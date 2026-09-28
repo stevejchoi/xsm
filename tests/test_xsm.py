@@ -206,6 +206,30 @@ class ScopeTest(TempState):
                         "reason": "prompt_input_exit", "turn_id": "x"})
         self.assertEqual([r.get("session_id") for r in config.reaches()], ["s-stay"])
 
+    def test_a_goodbye_from_another_home_leaves_the_pointer_and_its_reach(self):
+        """Pointers are keyed on runtime and session id only; a copied
+        CODEX_HOME holding the same thread id ended the other home's session
+        and dropped its reach while it ran on (2026-09-28)."""
+        from xsm import config, receive, registry
+        me = self._codex("s-twin", "a")
+        os.makedirs(os.path.join(self.tmp, "b"), exist_ok=True)
+        config.add_reach(me["ref"], os.path.join(self.tmp, "b"), "tester")
+        copy = os.path.join(self.tmp, "homes", "codex-copy")
+        os.makedirs(copy, exist_ok=True)
+        with mock.patch.dict(os.environ, {"CODEX_HOME": copy}):
+            receive.handle({"hook_event_name": "SessionEnd", "session_id": "s-twin",
+                            "reason": "prompt_input_exit", "turn_id": "x"})
+        rec = registry.by_session("codex", "s-twin")
+        self.assertNotIn("ended_at", rec)
+        self.assertEqual(rec["state"], "live")
+        self.assertEqual([r.get("session_id") for r in config.reaches()], ["s-twin"])
+        # the session's own goodbye, from its own home, still ends it
+        with mock.patch.dict(os.environ, {"CODEX_HOME": me["home"]}):
+            receive.handle({"hook_event_name": "SessionEnd", "session_id": "s-twin",
+                            "reason": "prompt_input_exit", "turn_id": "x"})
+        self.assertIn("ended_at", registry.by_session("codex", "s-twin"))
+        self.assertEqual(config.reaches(), [])
+
     def test_a_reach_holds_for_the_granted_session_only_when_refs_collide(self):
         from xsm import config
         me = self._codex("s-one", "a")

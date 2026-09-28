@@ -364,6 +364,12 @@ def _serve(peer: str, request: dict, span=None) -> dict:
     if not found.ok:
         return {"ok": False, "status": "refused", "error": found.reason}
     target = found.record
+    from .send import not_running
+    stopped = not_running(target)
+    if stopped:
+        # Refused here as a local send would be, or the message waits in a
+        # queue nobody reads and the peer is told it was queued (2026-09-28).
+        return {"ok": False, "status": "refused", "error": stopped}
     if not _project_members(project, target.get("cwd") or "/"):
         return {"ok": False, "status": "refused",
                 "error": "%s is not in project %s here" % (target.get("name"), project)}
