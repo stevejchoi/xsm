@@ -6,7 +6,7 @@ Let running Claude Code and Codex sessions find each other and exchange messages
 
 ## Overview
 
-xsm lets Claude Code, Codex, and other agent runtimes running in different environments talk to each other directly.
+xsm lets Claude Code and Codex sessions running in different environments talk to each other directly.
 
 ![How XSM connects agent sessions through native runtime paths and explicit communication scopes](docs/assets/xsm-overview.svg)
 
@@ -122,7 +122,8 @@ skill's guide and runs `xsm` itself.
 
 ### Communication scope
 
-Sessions in the same folder can talk to each other as they are. To connect other folders, both sides join
+Sessions in the same Git repository can talk to each other, even when they run from different subfolders.
+Outside a Git repository, sessions in the same folder can talk. To connect other folders, both sides join
 under the same name.
 
 ```bash
