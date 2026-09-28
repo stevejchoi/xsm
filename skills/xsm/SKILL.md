@@ -43,7 +43,7 @@ it, nothing after it, and run nothing else.
     [output of command 2]
 
 **`send <target> <message>`** — run one shell command:
-`xsm send <TARGET> --text <MESSAGE>`, where TARGET is the word after `send` and
+`xsm send <TARGET> --wait 10 --text <MESSAGE>`, where TARGET is the word after `send` and
 MESSAGE is everything after it, passed as a single shell-quoted argument. Do
 not rewrite the message. Reply with the command's output, copied exactly,
 inside one code block. If it fails with `sandbox-blocked`, call the MCP tool
