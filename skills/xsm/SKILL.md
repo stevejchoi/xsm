@@ -52,13 +52,16 @@ same way.
 
 **`join <project>`** / **`leave <project>`** — call the MCP tool `xsm_join` with
 `project` set to the word after it (and `leave` set to true for `leave`). It
-shows your user a form; their answer decides. Reply with the tool's result,
-copied exactly, inside one code block.
+asks your user in a form; only their choice counts. Call it once and reply with
+its result, copied exactly, inside one code block: it says who answered, and a
+terminal command when the form did not reach them. Say your user refused only
+if it says they chose `deny`.
 
 **`reach <folder>`** — call the MCP tool `xsm_reach` with `dir` set to the
 folder. It asks your user to let this session alone talk with the sessions
 started in that folder, both ways, until this session ends. Reply with the
-tool's result, copied exactly, inside one code block.
+tool's result, copied exactly, inside one code block, and call it once, as for
+`join`.
 
 **Your user typed `/xsm` or `$xsm` with no command, or one not listed here** —
 reply with exactly:
@@ -78,3 +81,9 @@ Codex peer refuses at once and says to use the `xsm_send` MCP tool: `codex
 queue` cannot run inside the sandbox, and the MCP server runs outside it. Send
 it with that tool, same target, kind and text. Do not retry the shell command
 and do not widen the sandbox.
+
+Two others are not breakage. `… is not registered yet` right after installing
+means the hooks register this session at its next prompt: have your user send
+any message, then retry; do not reinstall. A form tool can come back unseen by
+your user (Codex answers forms itself under `approval_policy = "never"` or
+auto-review); pass the result on as it is and do not call the tool again.
