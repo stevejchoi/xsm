@@ -93,13 +93,16 @@ def prune(now: float | None = None, dry_run: bool = False) -> dict:
             if not dry_run:
                 _unlink(p)
 
-    # A reach lasts as long as the session that was allowed it.
+    # A reach lasts as long as the run of the session that was allowed it.
+    # SessionEnd drops it on a clean exit; this catches a crash, a kill, and
+    # a resume under a new pid. Matched on identity and run, not ref: another
+    # session sharing the ref keeps nothing alive (2026-09-28).
     from . import config, registry
-    running = {r.get("ref") for r in registry.records() if r.get("state") in ("live", "unknown")}
-    removed["reaches"] = [r for r in config.reaches() if r.get("ref") not in running]
-    if not dry_run:
-        for r in removed["reaches"]:
-            config.drop_reach(r["ref"], r.get("root"))
+    running = [r for r in registry.records() if r.get("state") in ("live", "unknown")]
+    removed["reaches"] = [x for x in config.reaches()
+                          if not any(config.reach_holds(x, r) for r in running)]
+    if not dry_run and removed["reaches"]:
+        config.drop_reaches(removed["reaches"])
 
     if not dry_run:
         registry.mcp_beacons()          # drops beacons of MCP servers that are gone

@@ -122,31 +122,117 @@ class ScopeTest(TempState):
         self.assertIsNone(config.scope_for(parent, neighbour)[0])
         self.assertIsNotNone(config.scope_for(worker, neighbour)[0])   # same folder, as before
 
+    def _codex(self, sid, where, pid=None):
+        """A registered Codex session in `where` (relative to tmp): Codex needs
+        no socket, so a live pid is enough to read live."""
+        from xsm import registry
+        home = os.path.join(self.tmp, "homes", "codex")
+        os.makedirs(home, exist_ok=True)
+        cwd = os.path.join(self.tmp, where)
+        os.makedirs(cwd, exist_ok=True)
+        registry.upsert("codex", home, sid, pid or os.getpid(), cwd, name=sid)
+        return registry.by_session("codex", sid)
+
+    def _dead_pid(self):
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        p.wait()
+        return p.pid
+
+    def _share_ref(self, sid, ref):
+        """Force a ref collision: 24-bit refs collided within ~11k tries."""
+        from xsm import paths, registry
+        p = paths.path(paths.SESSIONS, "codex-%s.json" % sid)
+        rec = paths.read_json(p)
+        rec["ref"] = ref
+        paths.write_json(p, rec)
+        return registry.by_session("codex", sid)
+
     def test_a_reach_opens_one_session_to_one_folder_both_ways(self):
         from xsm import config
-        me = {"cwd": os.path.join(self.tmp, "a"), "runtime": "claude", "ref": "r1", "state": "live"}
-        mate = {"cwd": os.path.join(self.tmp, "a"), "runtime": "claude", "ref": "r2"}
-        there = {"cwd": os.path.join(self.tmp, "b", "sub"), "runtime": "codex", "ref": "t1"}
-        elsewhere = {"cwd": os.path.join(self.tmp, "c"), "runtime": "codex", "ref": "e1"}
-        for d in ("a", "b/sub", "c"):
-            os.makedirs(os.path.join(self.tmp, d), exist_ok=True)
+        me = self._codex("s-me", "a")
+        mate = self._codex("s-mate", "a")
+        there = self._codex("s-there", "b/sub")
+        elsewhere = self._codex("s-else", "c")
         self.assertIsNone(config.scope_for(me, there)[0])
         self.assertIn("xsm_reach", config.scope_for(me, there)[1])
-        config.add_reach("r1", os.path.join(self.tmp, "b"), "tester")
-        self.assertEqual(config.scope_for(me, there)[0], "reach:r1")
-        self.assertEqual(config.scope_for(there, me)[0], "reach:r1")      # the reply
+        entry, added = config.add_reach(me["ref"], os.path.join(self.tmp, "b"), "tester")
+        self.assertTrue(added)
+        self.assertEqual((entry["session_id"], entry["pid"]), ("s-me", os.getpid()))
+        link = "reach:%s" % me["ref"]
+        self.assertEqual(config.scope_for(me, there)[0], link)
+        self.assertEqual(config.scope_for(there, me)[0], link)          # the reply
         self.assertIsNone(config.scope_for(mate, there)[0])              # only that session
         self.assertIsNone(config.scope_for(me, elsewhere)[0])            # only that folder
-        self.assertEqual(config.drop_reach("r1"), 1)
+        self.assertEqual(config.drop_reach(me["ref"]), 1)
         self.assertIsNone(config.scope_for(me, there)[0])
 
     def test_a_reach_goes_when_its_session_does(self):
         from xsm import config, housekeeping
+        me = self._codex("s-gone", "a")
         os.makedirs(os.path.join(self.tmp, "b"), exist_ok=True)
-        config.add_reach("gone00", os.path.join(self.tmp, "b"), "tester")
+        config.add_reach(me["ref"], os.path.join(self.tmp, "b"), "tester")
+        self._codex("s-gone", "a", pid=self._dead_pid())               # it crashed
         removed = housekeeping.prune()
-        self.assertEqual([r["ref"] for r in removed["reaches"]], ["gone00"])
+        self.assertEqual([r["ref"] for r in removed["reaches"]], [me["ref"]])
         self.assertEqual(config.reaches(), [])
+
+    def test_a_reach_does_not_come_back_with_a_resume(self):
+        """`claude --resume` reuses the session id under a new pid; before the
+        hourly prune ran, the reach used to apply again (2026-09-28)."""
+        from xsm import config, housekeeping
+        me = self._codex("s-res", "a")
+        there = self._codex("s-far", "b")
+        config.add_reach(me["ref"], os.path.join(self.tmp, "b"), "tester")
+        self.assertIsNotNone(config.scope_for(me, there)[0])
+        resumed = self._codex("s-res", "a", pid=os.getppid())          # same id, new run
+        self.assertEqual(resumed["state"], "live")
+        self.assertEqual(resumed["ref"], me["ref"])
+        self.assertIsNone(config.scope_for(resumed, there)[0])
+        self.assertIsNone(config.scope_for(there, resumed)[0])
+        # a probe without pid/lstart is checked against the pointer on disk
+        bare = {k: resumed[k] for k in ("runtime", "home", "session_id", "ref", "cwd")}
+        self.assertIsNone(config.scope_for(bare, there)[0])
+        self.assertEqual(len(housekeeping.prune()["reaches"]), 1)
+        self.assertEqual(config.reaches(), [])
+
+    def test_session_end_drops_the_reach(self):
+        from xsm import config, receive
+        me = self._codex("s-bye", "a")
+        other = self._codex("s-stay", "c")
+        os.makedirs(os.path.join(self.tmp, "b"), exist_ok=True)
+        config.add_reach(me["ref"], os.path.join(self.tmp, "b"), "tester")
+        config.add_reach(other["ref"], os.path.join(self.tmp, "b"), "tester")
+        receive.handle({"hook_event_name": "SessionEnd", "session_id": "s-bye",
+                        "reason": "prompt_input_exit", "turn_id": "x"})
+        self.assertEqual([r.get("session_id") for r in config.reaches()], ["s-stay"])
+
+    def test_a_reach_holds_for_the_granted_session_only_when_refs_collide(self):
+        from xsm import config
+        me = self._codex("s-one", "a")
+        twin = self._share_ref(self._codex("s-two", "d")["session_id"], me["ref"])
+        there = self._codex("s-far2", "b")
+        with self.assertRaises(ValueError) as cm:            # which of the two? refuse
+            config.add_reach(me["ref"], os.path.join(self.tmp, "b"), "tester")
+        self.assertIn("share ref", str(cm.exception))
+        config.add_reach(me["ref"], os.path.join(self.tmp, "b"), "tester", session=me)
+        self.assertIsNotNone(config.scope_for(me, there)[0])
+        self.assertIsNone(config.scope_for(twin, there)[0])
+        self.assertIsNone(config.scope_for(there, twin)[0])
+
+    def test_a_reach_stored_without_its_session_holds_for_nobody(self):
+        """Rows written before the binding carry only a ref; they fail closed
+        and granting again replaces them."""
+        from xsm import config, paths
+        me = self._codex("s-old", "a")
+        there = self._codex("s-far3", "b")
+        root = config.project_root(os.path.join(self.tmp, "b"))
+        paths.write_json(paths.path(config.CONFIG), {"reaches": [
+            {"ref": me["ref"], "root": root, "t": 1, "by": "tester"}]})
+        self.assertIsNone(config.scope_for(me, there)[0])
+        entry, added = config.add_reach(me["ref"], os.path.join(self.tmp, "b"), "tester")
+        self.assertTrue(added)
+        self.assertEqual(len(config.reaches()), 1)
+        self.assertIsNotNone(config.scope_for(me, there)[0])
 
     def test_no_worker_link_without_refs(self):
         from xsm import config, workers
@@ -230,6 +316,115 @@ class ResolveTest(TempState):
         self._register("team@standup", "claude-3", "s3")
         found = resolve.resolve("team@standup", include_offline=True)
         self.assertEqual(found.status, "resolved")
+
+
+class RefCollisionTest(TempState):
+    """Refs are 24 bits (sha256[:6]); 2026-09-28 found collisions within ~11k
+    synthetic tries. An address or a header ref that names two sessions must
+    not quietly pick one."""
+
+    def _codex(self, sid, pid=None):
+        from xsm import registry
+        home = os.path.join(self.tmp, "homes", "codex")
+        os.makedirs(home, exist_ok=True)
+        registry.upsert("codex", home, sid, pid or os.getpid(), self.tmp, name=sid)
+        return registry.by_session("codex", sid)
+
+    def _collide(self, sid, ref):
+        from xsm import paths, registry
+        p = paths.path(paths.SESSIONS, "codex-%s.json" % sid)
+        rec = paths.read_json(p)
+        rec["ref"] = ref
+        paths.write_json(p, rec)
+        return registry.by_session("codex", sid)
+
+    def test_a_shared_ref_resolves_ambiguous_with_session_addresses(self):
+        from xsm import resolve
+        one = self._codex("c-one")
+        self._codex("c-two")
+        self._collide("c-two", one["ref"])
+        found = resolve.resolve("ref:%s" % one["ref"])
+        self.assertEqual(found.status, "ambiguous")
+        self.assertEqual(len(found.candidates), 2)
+        self.assertIn("codex:c-two", found.reason)
+        self.assertEqual(resolve.resolve("codex:c-two").status, "resolved")
+
+    def test_receive_refuses_a_sender_whose_ref_names_two_sessions(self):
+        from xsm import config, envelope, receive
+        one = self._codex("c-a")
+        two = self._collide(self._codex("c-b")["session_id"], one["ref"])
+        me = self._codex("c-me")
+        wire = envelope.build("hi", msg_id="m1", sender=one, scope=config.scope_for(one, me)[0])
+        bare = re.sub(r' from-session="[^"]*"', "", wire)
+        blind = bare.replace('from="c-a@codex"', 'from="someone@codex"')
+        # with neither the session nor the name telling them apart, no sender
+        decision, reason = receive.check(envelope.parse(blind), me)
+        self.assertEqual(decision, "block")
+        self.assertIn("share ref %s" % two["ref"], reason)
+        rec, why = receive._sender_record(envelope.parse(blind))
+        self.assertIsNone(rec)
+        self.assertIn("ambiguous", why)
+        # the envelope names its session: that picks one of the two
+        self.assertEqual(receive.check(envelope.parse(wire), me), ("pass", ""))
+        self.assertEqual(receive._sender_record(envelope.parse(wire))[0]["session_id"], "c-a")
+        # without it, the from name still does
+        self.assertEqual(receive._sender_record(envelope.parse(bare))[0]["session_id"], "c-a")
+
+
+class StoppedTargetSendTest(TempState):
+    """Names resolve to live sessions only; ref:, claude: and codex: used to
+    reach a stopped one too (2026-09-28)."""
+
+    def _session(self, runtime, sid, pid):
+        from xsm import registry
+        home = os.path.join(self.tmp, "homes", runtime)
+        os.makedirs(home, exist_ok=True)
+        registry.upsert(runtime, home, sid, pid, self.tmp, name=sid)
+        return registry.by_session(runtime, sid)
+
+    def _dead_pid(self):
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        p.wait()
+        return p.pid
+
+    def _no_delivery(self):
+        from xsm import adapters
+
+        def called(*args, **kw):
+            raise AssertionError("an adapter was called for a stopped target")
+        return mock.patch.multiple(adapters, to_claude=called, to_codex=called)
+
+    def test_an_ended_or_stale_target_is_refused_by_any_address(self):
+        from xsm import ledger, registry, send
+        me = self._session("codex", "me", os.getpid())
+        gone = self._session("claude", "gone", self._dead_pid())
+        registry.mark_ended("claude", "gone", "prompt_input_exit")
+        crashed = self._session("codex", "crashed", self._dead_pid())
+        self.assertEqual(registry.by_session("claude", "gone")["state"], "ended")
+        with self._no_delivery():
+            for spec in ("ref:%s" % gone["ref"], "claude:gone"):
+                r = send.send(spec, "hi", sender=me)
+                self.assertEqual(r.status, "refused", spec)
+                self.assertIn("is not running (ended)", r.reason)
+                self.assertIn("claude --resume gone", r.reason)
+            for spec in ("ref:%s" % crashed["ref"], "codex:crashed"):
+                r = send.send(spec, "hi", sender=me)
+                self.assertEqual(r.status, "refused", spec)
+                self.assertIn("is not running (stale)", r.reason)
+        self.assertEqual(ledger.recent(), [], "nothing was recorded as queued")
+
+    def test_live_and_unknown_targets_still_send(self):
+        from xsm import adapters, send
+        me = self._session("codex", "me2", os.getpid())
+        live = self._session("codex", "alive", os.getpid())
+        unknown = self._session("codex", "unsure", 0)          # no pid: liveness unknown
+        self.assertEqual((live["state"], unknown["state"]), ("live", "unknown"))
+        sent = []
+        with mock.patch.object(adapters, "to_codex", lambda *a: sent.append(a[1])), \
+                mock.patch.dict(os.environ, {"CODEX_SANDBOX": "", "XSM_SANDBOXED": ""}):
+            for spec in ("ref:%s" % live["ref"], "codex:unsure"):
+                self.assertEqual(send.send(spec, "hi", sender=me).status, "sent-unconfirmed", spec)
+        self.assertEqual(sent, ["alive", "unsure"])
 
 
 class HookFallbackTest(TempState):

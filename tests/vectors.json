@@ -347,6 +347,138 @@
    "expect": {
     "scope_kind": null
    }
+  },
+  {
+   "id": "reach-holds-for-the-run-it-was-granted-to",
+   "why": "A reach names one session by runtime, home, session id, pid and process start time; that session and the sessions under root talk under reach:<ref>.",
+   "a": {
+    "cwd": "{tmp}/far",
+    "alias": "claude-3",
+    "ref": "aaaaaa",
+    "runtime": "claude",
+    "home": "{tmp}/homes/claude-3",
+    "session_id": "s1",
+    "pid": 4242,
+    "lstart": "Mon Sep 28 10:00:00 2026"
+   },
+   "b": {
+    "cwd": "{tmp}/ws",
+    "runtime": "codex",
+    "alias": "codex",
+    "ref": "bbbbbb",
+    "home": "{tmp}/homes/codex",
+    "session_id": "t1",
+    "pid": 1,
+    "lstart": "x"
+   },
+   "config": {
+    "reaches": [
+     {
+      "ref": "aaaaaa",
+      "root": "{tmp}/ws",
+      "t": 1,
+      "by": "vector",
+      "runtime": "claude",
+      "home": "{tmp}/homes/claude-3",
+      "session_id": "s1",
+      "pid": 4242,
+      "lstart": "Mon Sep 28 10:00:00 2026"
+     }
+    ]
+   },
+   "expect": {
+    "scope_kind": "reach"
+   }
+  },
+  {
+   "id": "reach-does-not-come-back-with-a-resume",
+   "why": "claude --resume reuses the session id under a new pid; the reach was for the run that ended (2026-09-28).",
+   "a": {
+    "cwd": "{tmp}/far",
+    "alias": "claude-3",
+    "ref": "aaaaaa",
+    "runtime": "claude",
+    "home": "{tmp}/homes/claude-3",
+    "session_id": "s1",
+    "pid": 4343,
+    "lstart": "Mon Sep 28 11:00:00 2026"
+   },
+   "b": {
+    "cwd": "{tmp}/ws",
+    "runtime": "codex",
+    "alias": "codex",
+    "ref": "bbbbbb",
+    "home": "{tmp}/homes/codex",
+    "session_id": "t1",
+    "pid": 1,
+    "lstart": "x"
+   },
+   "config": {
+    "reaches": [
+     {
+      "ref": "aaaaaa",
+      "root": "{tmp}/ws",
+      "t": 1,
+      "by": "vector",
+      "runtime": "claude",
+      "home": "{tmp}/homes/claude-3",
+      "session_id": "s1",
+      "pid": 4242,
+      "lstart": "Mon Sep 28 10:00:00 2026"
+     }
+    ]
+   },
+   "expect": {
+    "scope_kind": null
+   }
+  },
+  {
+   "id": "reach-is-not-matched-by-ref",
+   "why": "Refs are 24 bits and collide; another session with the same ref gets nothing, and a row without the session's identity holds for nobody.",
+   "a": {
+    "cwd": "{tmp}/far",
+    "alias": "claude-3",
+    "ref": "aaaaaa",
+    "runtime": "claude",
+    "home": "{tmp}/homes/claude-3",
+    "session_id": "s2",
+    "pid": 5151,
+    "lstart": "Mon Sep 28 10:00:00 2026"
+   },
+   "b": {
+    "cwd": "{tmp}/ws",
+    "runtime": "codex",
+    "alias": "codex",
+    "ref": "bbbbbb",
+    "home": "{tmp}/homes/codex",
+    "session_id": "t1",
+    "pid": 1,
+    "lstart": "x"
+   },
+   "config": {
+    "reaches": [
+     {
+      "ref": "aaaaaa",
+      "root": "{tmp}/ws",
+      "t": 1,
+      "by": "vector",
+      "runtime": "claude",
+      "home": "{tmp}/homes/claude-3",
+      "session_id": "s1",
+      "pid": 4242,
+      "lstart": "Mon Sep 28 10:00:00 2026"
+     },
+     {
+      "ref": "aaaaaa",
+      "root": "{tmp}/ws",
+      "t": 1,
+      "by": "old"
+     }
+    ]
+   },
+   "expect": {
+    "scope_kind": null
+   }
   }
  ],
  "resolve": [

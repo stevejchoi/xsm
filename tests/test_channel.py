@@ -152,23 +152,29 @@ class McpServerTest(TempState):
         self.assertEqual(config.projects(), [])
 
     def test_reach_asks_the_person_and_records_only_an_allow(self):
-        from xsm import config
+        from xsm import config, registry
         other = os.path.join(self.tmp, "other")
         os.makedirs(other)
+        # A reach is bound to a running session's record, so the asker must be
+        # one (a Codex record with a live pid reads live without a socket).
+        home = os.path.join(self.tmp, "homes", "codex")
+        os.makedirs(home, exist_ok=True)
+        rec = registry.upsert("codex", home, "t-reach", os.getpid(), self.tmp, name="builder")
+        agent = dict(AGENT, ref=rec["ref"])
         call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "xsm_reach", "arguments": {"dir": other, "reason": "hand over a task"}}}
         deny = {"jsonrpc": "2.0", "id": "xsm-1", "result": {"action": "accept",
                                                             "content": {"answer": "deny"}}}
-        out, _ = self._run(self.INIT, call, deny)
+        out, _ = self._run(self.INIT, call, deny, session=agent)
         self.assertIn("other", next(m for m in out if m.get("method") == "elicitation/create")
                       ["params"]["message"])
         self.assertEqual(config.reaches(), [])
         allow = dict(deny, result={"action": "accept", "content": {"answer": "allow"}})
-        out, _ = self._run(self.INIT, call, allow)
+        out, _ = self._run(self.INIT, call, allow, session=agent)
         self.assertIn("allowed", next(m for m in out if m.get("id") == 2)
                       ["result"]["content"][0]["text"])
         self.assertEqual([(r["ref"], r["root"]) for r in config.reaches()],
-                         [(AGENT["ref"], os.path.realpath(other))])
+                         [(agent["ref"], os.path.realpath(other))])
 
     def _six(self, here):
         """Each form tool, its arguments, the answer that would make it act, and

@@ -50,12 +50,25 @@ def resolve(target: str, include_offline: bool = False) -> Resolution:
     for prefix in ("claude:", "codex:", "ref:"):
         if target.startswith(prefix):
             key, value = prefix[:-1], target[len(prefix):]
-            for rec in _pool(True):
-                if key == "ref" and rec.get("ref") == value:
-                    return Resolution("resolved", rec)
-                if key in ("claude", "codex") and rec.get("runtime") == key \
-                        and rec.get("session_id") == value:
-                    return Resolution("resolved", rec)
+            if key == "ref":
+                hits = [rec for rec in _pool(True) if rec.get("ref") == value]
+            else:
+                hits = [rec for rec in _pool(True) if rec.get("runtime") == key
+                        and rec.get("session_id") == value]
+            if len(hits) > 1:
+                # A ref is 24 bits: two sessions can share one (collisions within
+                # ~11k synthetic tries, 2026-09-28). Picking the first would send
+                # to whichever pointer the filesystem listed first.
+                return Resolution("ambiguous", candidates=hits, reason=(
+                    "%d sessions share %s; address one by its session id:\n%s" % (
+                        len(hits), target, "\n".join(
+                            "  %s:%s  (%s@%s, %s)" % (h.get("runtime"), h.get("session_id"),
+                                                      h.get("name"), h.get("alias"),
+                                                      h.get("state")) for h in hits))))
+            if hits:
+                # Any state: an address names one session exactly, and the
+                # caller decides what a stopped one means (send refuses it).
+                return Resolution("resolved", hits[0])
             return Resolution("not-found", reason="no session with %s" % target,
                               candidates=_live_addresses())
 
