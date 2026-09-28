@@ -1,12 +1,12 @@
-# Cross-Session Messaging
+# xsm (Cross-Session Messaging)
 
 English | [한국어](README_ko.md)
 
-A messaging system that lets Claude Code and Codex agent sessions see each other and exchange messages.
+Let running Claude Code and Codex sessions find each other and exchange messages.
 
 ## Overview
 
-`cross-session-messaging` (XSM) lets Claude Code, Codex, and other agent runtimes running in different environments talk to each other directly.
+xsm lets Claude Code, Codex, and other agent runtimes running in different environments talk to each other directly.
 
 ### Key features
 
@@ -63,7 +63,7 @@ are two ways to do it.
 **Claude Code: plugin** (recommended). The repository is its own marketplace.
 
 ```
-/plugin marketplace add ysys143/cross-session-messaging
+/plugin marketplace add ysys143/xsm
 /plugin install xsm@xsm
 ```
 
@@ -91,7 +91,8 @@ If one Claude home has both the plugin and a direct install, the hooks run twice
 to the repository by itself, so when `xsm doctor` reports it stale, update it with `xsm install --refresh`.
 
 Link `bin/xsm` into a directory on your PATH, such as `~/.local/bin`, to call it as `xsm` afterwards (with the
-plugin, it is on the PATH inside sessions automatically).
+plugin, it is on the PATH inside sessions automatically). On Linux, X.Org's session manager is also called
+`xsm` (package x11-session-utils); if it is installed, check with `command -v xsm` that this one comes first.
 
 ### Session registration
 

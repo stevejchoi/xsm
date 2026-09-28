@@ -1,12 +1,12 @@
-# Cross-Session Messaging
+# xsm (Cross-Session Messaging)
 
 [English](README.md) | 한국어
 
-Claude Code와 Codex 에이전트 세션들이 서로를 인식하고 메시지를 주고받을 수 있도록 하는 메시징 시스템입니다.
+떠 있는 Claude Code와 Codex 세션이 서로를 찾고 메시지를 주고받게 합니다.
 
 ## 개요
 
-`cross-session-messaging` (XSM)은 다양한 환경에서 실행되는 Claude Code, Codex, 그 외 에이전트 런타임 간의 직접 통신을 가능하게 합니다.
+xsm은 다양한 환경에서 실행되는 Claude Code, Codex, 그 외 에이전트 런타임 간의 직접 통신을 가능하게 합니다.
 
 ### 주요 특징
 
@@ -60,7 +60,7 @@ macOS와 Linux에서 동작합니다(Unix 소켓, `ps`, `/dev/tty`, tmux에 기�
 **Claude Code: 플러그인** (권장). 저장소 자체가 마켓플레이스입니다.
 
 ```
-/plugin marketplace add ysys143/cross-session-messaging
+/plugin marketplace add ysys143/xsm
 /plugin install xsm@xsm
 ```
 
@@ -87,7 +87,8 @@ bin/xsm doctor                                                # 설치 상태, �
 `xsm doctor`가 낡았다고 알려 주면 `xsm install --refresh`로 갱신합니다.
 
 `~/.local/bin` 등 PATH에 `bin/xsm`을 링크해두면 이후 `xsm`으로 부를 수 있습니다(플러그인으로 설치하면
-세션 안에서는 자동으로 PATH에 들어갑니다).
+세션 안에서는 자동으로 PATH에 들어갑니다). 리눅스에서는 X.Org의 세션 관리자도 이름이 `xsm`입니다(x11-session-utils
+패키지). 깔려 있다면 `command -v xsm`으로 이쪽이 먼저 잡히는지 확인하세요.
 
 ### 세션 등록
 

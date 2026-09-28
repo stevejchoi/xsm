@@ -1,12 +1,12 @@
 {
   "name": "xsm",
   "displayName": "Cross-Session Messaging",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Message the other Claude Code and Codex sessions on this machine: list them, send a task, answer one, start workers, and see what was delivered.",
   "author": {
     "name": "jaesolshin"
   },
-  "repository": "https://github.com/ysys143/cross-session-messaging",
+  "repository": "https://github.com/ysys143/xsm",
   "license": "MIT",
   "keywords": [
     "messaging",
