@@ -305,7 +305,7 @@ def codex_hook_hash(event: str, group: dict, handler: dict) -> str | None:
 _STATE_HEADER = re.compile(
     r"""^\[\s*hooks\s*\.\s*state\s*\.\s*("(?:[^"\\]|\\.)*"|'[^']*')\s*\]\s*(?:#.*)?$""")
 _STATE_VALUE = re.compile(
-    r"""^(enabled|trusted_hash)\s*=\s*(true|false|"(?:[^"\\]|\\.)*"|'[^']*')\s*(?:#.*)?$""")
+    r"""^(["']?)(enabled|trusted_hash)\1\s*=\s*(true|false|"(?:[^"\\]|\\.)*"|'[^']*')\s*(?:#.*)?$""")
 
 
 def _toml_string(token: str):
@@ -323,8 +323,9 @@ def codex_hook_states(config_text: str) -> dict:
 
     tomllib where there is one (3.11+). The pinned interpreter may be 3.9
     (see config.py), so without it only the form Codex itself writes — one
-    [hooks.state."<key>"] table per hook — is read; any other spelling counts
-    as no state, which reads as not trusted rather than trusted."""
+    [hooks.state."<key>"] table per hook, its keys bare or quoted — is read;
+    any other spelling counts as no state, which reads as not trusted rather
+    than trusted."""
     try:
         import tomllib
     except ImportError:
@@ -349,8 +350,13 @@ def codex_hook_states(config_text: str) -> dict:
             continue
         value = _STATE_VALUE.match(line) if current is not None else None
         if value:
-            field, token = value.groups()
+            _quote, field, token = value.groups()
             current[field] = token == "true" if token in ("true", "false") else _toml_string(token)
+        elif current is not None and "enabled" in line:
+            # A spelling of `enabled` this reader does not know may be a
+            # switch-off; `"enabled" = false` read as on before (review,
+            # 2026-09-28), and the home's threads were adopted.
+            current["enabled"] = False
     return out
 
 
@@ -369,6 +375,8 @@ def codex_trust(home: str, approvals: bool = False) -> dict:
     looks exactly like a session that never registered.
     Returns {event: True/False} for the events that carry our groups; False
     wherever the evidence is missing.
+    This is the state recorded in the home's config.toml; a session started
+    with a profile or `-c hooks.state...` may run with another, unseen here.
     """
     given = os.path.join(os.path.expanduser(home), "hooks.json")
     hooks_file = os.path.join(os.path.realpath(os.path.expanduser(home)), "hooks.json")

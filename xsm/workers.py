@@ -341,6 +341,17 @@ def _claude_worker_settings(worker: dict) -> str:
     return path
 
 
+# What the calling session's runtime put in its shell, of either runtime. A
+# Claude worker started by a Codex session kept that thread's CODEX_THREAD_ID
+# and CODEX_SANDBOX, and where its own sandbox refused `ps` it signed as the
+# Codex parent (adversarial review, 2026-09-28). XSM_SANDBOXED goes too: xsm
+# sets it again in the settings of a worker that is sandboxed.
+CALLER_IDENTITY = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDECODE",
+                   "CLAUDE_CODE_ENTRYPOINT", "CODEX_THREAD_ID", "CODEX_SESSION_ID",
+                   "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED", "CODEX_PERMISSION_PROFILE",
+                   "XSM_SANDBOXED")
+
+
 def _env(worker: dict) -> dict:
     env = dict(os.environ)
     # A worker is not part of the framework or tmux client it was started from.
@@ -357,7 +368,7 @@ def _env(worker: dict) -> dict:
         env.pop("CLAUDE_CONFIG_DIR", None)
     else:
         env["CLAUDE_CONFIG_DIR" if worker["runtime"] == "claude" else "CODEX_HOME"] = worker["home"]
-    for k in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET"):
+    for k in CALLER_IDENTITY:
         env.pop(k, None)                # the caller's identity must not leak in
     return env
 
@@ -562,8 +573,8 @@ def _start_in_tmux(worker: dict, pane: str | None) -> None:
     assignments = " ".join("%s=%s" % (k, shlex.quote(env[k]))
                            for k in ("XSM_WORKER", "CLAUDE_CONFIG_DIR", "CODEX_HOME",
                                      "XSM_HOME") if k in env)
-    unset = " ".join("-u %s" % k for _, keys in FRAMEWORKS for k in keys) + \
-        " -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_MESSAGING_SOCKET"
+    unset = " ".join("-u %s" % k for k in [k for _, keys in FRAMEWORKS for k in keys]
+                     + list(CALLER_IDENTITY))
     if worker["runtime"] == "claude":
         argv = _claude_argv(worker, _claude_worker_settings(worker))
     else:

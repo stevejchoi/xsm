@@ -29,10 +29,21 @@ def _run_cli(argv: list) -> str:
     return out.getvalue()
 
 
+RUNTIME_IDENTITY = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET", "CODEX_THREAD_ID",
+                    "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED", "XSM_SANDBOXED")
+
+
 class TempState(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="xsm-test-")
         os.environ["XSM_HOME"] = self.tmp
+        # The suite runs inside a Claude or Codex shell, whose ids and sandbox
+        # markers decide who `me` is: a test setting a Claude id kept the real
+        # CODEX_THREAD_ID beside it (review, 2026-09-28). Tests set their own.
+        for key in RUNTIME_IDENTITY:
+            self.addCleanup(lambda k=key, v=os.environ.get(key):
+                            os.environ.__setitem__(k, v) if v is not None else os.environ.pop(k, None))
+            os.environ.pop(key, None)
         for mod in [m for m in list(sys.modules) if m.startswith("xsm")]:
             del sys.modules[mod]
         from xsm import paths, registry
@@ -1953,14 +1964,19 @@ class SelfIdentityTest(TempState):
         xhome = os.path.join(self.tmp, "homes", "codex")
         os.makedirs(chome)
         os.makedirs(xhome)
+        identity.pid_alive = lambda pid: True
+        identity.lstart = lambda pid: {1111: "Mon Sep 28 09:00:00 2026",
+                                       2222: "Mon Sep 28 10:00:00 2026"}.get(pid)
         registry.upsert("claude", chome, "s-claude", 1111, self.tmp, name="builder")
         registry.upsert("codex", xhome, "t-codex", 2222, self.tmp, name="reviewer")
+        identity.lstart = lambda pid: None                           # `ps` refused
         os.environ["CLAUDE_CODE_SESSION_ID"] = "s-claude"
         os.environ["CODEX_THREAD_ID"] = "t-codex"
         walk = identity.ancestor_pid
         self.addCleanup(setattr, identity, "ancestor_pid", walk)
 
         identity.ancestor_pid = lambda names, max_hops=10: None      # the Codex sandbox
+        # Codex started after that Claude, so it is the one inside.
         self.assertEqual(registry.me()["session_id"], "t-codex")
         identity.ancestor_pid = lambda names, max_hops=10: 2222      # nearest agent is Codex
         self.assertEqual(registry.me()["session_id"], "t-codex")
@@ -2315,9 +2331,11 @@ class OwnRuntimeIdentityTest(_EnvMixin, TempState):
         self.assertEqual(registry.me(cwd=self.tmp)["session_id"], "t-mine")
 
     def test_a_codex_carrying_only_a_registered_claude_id_does_not_take_it(self):
-        from xsm import registry
+        from xsm import identity, registry
+        identity.pid_alive = lambda pid: True
         registry.upsert("claude", self.chome, "s-claude", 1111, self.tmp, name="builder")
-        self._env(CLAUDE_CODE_SESSION_ID="s-claude", CODEX_THREAD_ID="t-codex")
+        self._env(CLAUDE_CODE_SESSION_ID="s-claude", CODEX_THREAD_ID="t-codex",
+                  CODEX_SANDBOX="seatbelt")
         self._walk(None)                                     # the Codex sandbox
         self.assertEqual(registry._me(None, self.tmp), (None, "none:codex-thread-unregistered"))
         self._walk(2222, "codex")                            # nearest agent: an unregistered Codex
@@ -2354,7 +2372,8 @@ class OwnRuntimeIdentityTest(_EnvMixin, TempState):
     def test_a_codex_carrying_a_claude_id_is_told_about_its_thread(self):
         """It was told to install xsm into the Claude home it inherited."""
         from xsm import registry
-        self._env(CLAUDE_CODE_SESSION_ID="s-claude", CODEX_THREAD_ID="t-codex")
+        self._env(CLAUDE_CODE_SESSION_ID="s-claude", CODEX_THREAD_ID="t-codex",
+                  CODEX_SANDBOX="seatbelt")
         self._walk(None)
         why = registry.unregistered_reason()
         self.assertIn("Codex thread (t-codex)", why)
@@ -2362,6 +2381,99 @@ class OwnRuntimeIdentityTest(_EnvMixin, TempState):
         self.assertNotIn("--claude-home", why)
         self._walk(1111, "claude")                           # a Claude shell after all
         self.assertIn("--claude-home", registry.unregistered_reason())
+        self._env(CODEX_SANDBOX=None)
+        self._walk(None)                                     # and nothing tells them apart
+        why = registry.unregistered_reason()
+        self.assertIn("both a Claude Code session id (s-claude) and a Codex thread id (t-codex)",
+                      why)
+        self.assertNotIn("--claude-home", why)
+
+
+class NestedRuntimeTest(_EnvMixin, TempState):
+    """A shell carrying both runtimes' ids where the process walk cannot run.
+    That was read as the Codex sandbox, but a Claude worker spawned by a Codex
+    session kept the thread's id and CODEX_SANDBOX, and in its own sandbox
+    `ps` is refused too — so it signed as the Codex parent (adversarial
+    review, 2026-09-28)."""
+
+    def setUp(self):
+        super().setUp()
+        from xsm import identity
+        self.chome = os.path.join(self.tmp, "homes", "claude")
+        self.xhome = os.path.join(self.tmp, "homes", "codex")
+        os.makedirs(self.chome)
+        os.makedirs(self.xhome)
+        self.alive = {1111, 2222}
+        identity.pid_alive = lambda pid: pid in self.alive
+        self._walk(None)
+
+    def _register(self, codex_start=None, claude_start=None):
+        from xsm import identity, registry
+        starts = {1111: claude_start, 2222: codex_start}
+        identity.lstart = lambda pid: starts.get(pid)
+        registry.upsert("claude", self.chome, "s-worker", 1111, self.tmp, name="worker",
+                        socket="/tmp/cc-socks/1111.sock")
+        registry.upsert("codex", self.xhome, "t-parent", 2222, self.tmp, name="parent")
+        identity.lstart = lambda pid: None                   # `ps` refused from here on
+
+    def test_a_worker_carries_neither_runtimes_identity(self):
+        import shlex
+        from xsm import workers
+        caller = {k: "x" for k in workers.CALLER_IDENTITY}
+        self.assertTrue(set(workers.AGENT_MARKERS) <= set(workers.CALLER_IDENTITY))
+        with mock.patch.dict(os.environ, caller):
+            for runtime in ("claude", "codex"):
+                env = workers._env({"name": "w", "runtime": runtime, "home": self.tmp})
+                self.assertEqual([k for k in caller if k in env], [], runtime)
+            seen = []
+
+            def run(argv, **kw):
+                seen.append(argv)
+                return mock.Mock(returncode=0, stdout="%9 4242\n", stderr="")
+            w = {"name": "p", "runtime": "codex", "home": self.tmp, "cwd": self.tmp,
+                 "mode": "pane", "model": "m"}
+            with mock.patch.object(workers.subprocess, "run", run), \
+                    mock.patch.object(workers.time, "sleep", lambda s: None):
+                workers._start_in_tmux(w, "%1")
+        # tmux starts the pane from its server's environment, not ours, so each
+        # one must be unset on the command line too.
+        command = shlex.split(next(a for a in seen if a[:2] == ["tmux", "split-window"])[-1])
+        for key in caller:
+            self.assertIn(key, command[command.index("-u"):], key)
+
+    def test_a_claude_started_by_a_codex_session_is_itself(self):
+        from xsm import registry
+        self._register(codex_start="Mon Sep 28 09:00:00 2026",
+                       claude_start="Mon Sep 28 10:00:00 2026")
+        self._env(CLAUDE_CODE_SESSION_ID="s-worker", CODEX_THREAD_ID="t-parent",
+                  CODEX_SANDBOX="seatbelt", CLAUDE_CODE_MESSAGING_SOCKET="/tmp/cc-socks/1111.sock")
+        self.assertEqual(registry.me(cwd=self.tmp)["session_id"], "s-worker")
+        # The other way round — a Codex started from that Claude's shell.
+        self._register(codex_start="Mon Sep 28 10:00:00 2026",
+                       claude_start="Mon Sep 28 09:00:00 2026")
+        self.assertEqual(registry.me(cwd=self.tmp)["session_id"], "t-parent")
+
+    def test_a_session_whose_process_is_gone_is_not_this_one(self):
+        from xsm import registry
+        self._register()
+        self._env(CLAUDE_CODE_SESSION_ID="s-worker", CODEX_THREAD_ID="t-parent",
+                  CLAUDE_CODE_MESSAGING_SOCKET="/tmp/cc-socks/1111.sock")
+        self.alive = {1111}
+        self.assertEqual(registry.me(cwd=self.tmp)["session_id"], "s-worker")
+        self.alive = {2222}
+        self.assertEqual(registry.me(cwd=self.tmp)["session_id"], "t-parent")
+
+    def test_nothing_to_tell_them_apart_is_no_record_not_another_session(self):
+        from xsm import registry
+        self._register()
+        self._env(CLAUDE_CODE_SESSION_ID="s-worker", CODEX_THREAD_ID="t-parent")
+        self.assertEqual(registry._me(None, self.tmp), (None, "none:ambiguous-runtime"))
+        self.assertIn("both a Claude Code session id", registry.unregistered_reason())
+        # A sandbox marker is evidence: xsm's for its Claude workers, Codex's own.
+        self._env(XSM_SANDBOXED="1")
+        self.assertEqual(registry.me(cwd=self.tmp)["session_id"], "s-worker")
+        self._env(XSM_SANDBOXED=None, CODEX_SANDBOX="seatbelt")
+        self.assertEqual(registry.me(cwd=self.tmp)["session_id"], "t-parent")
 
 
 class CodexHookTrustTest(TempState):
@@ -2449,6 +2561,46 @@ class CodexHookTrustTest(TempState):
             with mock.patch.object(builtins, "__import__", no_tomllib):
                 self.assertEqual(install.codex_trust(home),
                                  {"SessionStart": want, "UserPromptSubmit": want}, text)
+
+    def test_the_parse_without_tomllib_reads_quoted_keys(self):
+        """`"enabled" = false` is the same TOML as `enabled = false`, and the
+        3.9 reader took it for a hook still switched on (review, 2026-09-28)."""
+        import builtins
+        from xsm import install
+        home = self._home()
+        real = builtins.__import__
+
+        def no_tomllib(name, *args, **kwargs):
+            if name == "tomllib":
+                raise ImportError(name)
+            return real(name, *args, **kwargs)
+
+        trusted = _trusted_config(home)
+        for text, want in ((trusted.replace("trusted_hash =", '"trusted_hash" ='), True),
+                           (trusted.replace("trusted_hash =", "'trusted_hash'=")
+                            .replace("\n\n", "\n'enabled'=true\n\n"), True),
+                           (trusted.replace("\n\n", '\n"enabled" = false\n\n'), False),
+                           (trusted.replace("\n\n", "\n'enabled'=false\n\n"), False),
+                           (trusted.replace("\n\n", "\nenabled = [false]\n\n"), False)):
+            self._config(home, text)
+            with mock.patch.object(builtins, "__import__", no_tomllib):
+                self.assertEqual(install.codex_trust(home),
+                                 {"SessionStart": want, "UserPromptSubmit": want}, text)
+
+    def test_a_home_trusting_only_session_start_is_not_adopted(self):
+        """UserPromptSubmit is the gate every message passes; a home without
+        it was adopted into a session that could never take one."""
+        from xsm import install, paths, registry
+        home = self._home()
+        hooks = paths.read_json(os.path.join(home, "hooks.json"))
+        hooks["hooks"]["UserPromptSubmit"] = [g for g in hooks["hooks"]["UserPromptSubmit"]
+                                              if not install._is_ours(g)]
+        paths.write_json(os.path.join(home, "hooks.json"), hooks, mode=0o644)
+        self._config(home, _trusted_config(home))
+        self.assertEqual(install.codex_trust(home), {"SessionStart": True})
+        registry._open_codex_threads = lambda h: [("t-new", "fresh", self.tmp, None, 0, 0, os.getpid())]
+        self.assertEqual(registry.adopt_open_codex(), [])
+        self.assertIn("not trusted", registry.unregistered()[0]["why"])
 
     def test_a_home_whose_hooks_codex_will_not_run_is_not_adopted(self):
         from xsm import registry

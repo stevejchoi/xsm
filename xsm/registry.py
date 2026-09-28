@@ -242,6 +242,17 @@ def _open_codex_threads(home: str) -> list:
     return chosen
 
 
+def _hooks_will_register(home: str) -> bool:
+    """Whether Codex will run both xsm hooks in this home. SessionStart alone
+    is not enough: UserPromptSubmit is the gate every message passes, and a
+    home trusting only SessionStart was adopted into a session that could
+    never take a message (adversarial review, 2026-09-28). workers.spawn
+    requires the same two."""
+    from . import install                          # lazy: keeps hook imports small
+    trust = install.codex_trust(home)
+    return all(trust.get(k) for k in ("SessionStart", "UserPromptSubmit"))
+
+
 def adopt_open_codex() -> list:
     """Register open Codex threads that have not run their hook yet.
 
@@ -259,12 +270,10 @@ def adopt_open_codex() -> list:
     """
     adopted = []
     known = {r.get("session_id") for r in records()}
+    trusted = {h["path"] for h in config.homes()
+               if h.get("runtime") == "codex" and _hooks_will_register(h["path"])}
     for home in config.homes():
-        if home.get("runtime") != "codex":
-            continue
-        from . import install
-        trust = install.codex_trust(home["path"])
-        if not trust or not all(trust.values()):
+        if home["path"] not in trusted:
             continue
         for row in _open_codex_threads(home["path"]):
             thread_id, name, cwd, _rollout, _created, _updated, pid = row
@@ -278,13 +287,6 @@ def adopt_open_codex() -> list:
             known.add(thread_id)
     # A thread with no prompt yet is in no Codex table; its beacon and Codex's
     # log name it. Its MCP server's pid keeps its liveness honest.
-    trusted = set()
-    for home in config.homes():
-        if home.get("runtime") == "codex":
-            from . import install
-            trust = install.codex_trust(home["path"])
-            if trust and all(trust.values()):
-                trusted.add(home["path"])
     for row in fresh_codex_threads():
         if not row.get("session_id") or row["session_id"] in known or row["home"] not in trusted:
             continue
@@ -427,10 +429,11 @@ def unregistered() -> list:
         if home.get("runtime") == "codex":
             from . import install                         # lazy: keeps hook imports small
             trust = install.codex_trust(home["path"])
+            trusted = not trust or all(trust.get(k) for k in ("SessionStart", "UserPromptSubmit"))
             for thread_id, name, cwd, rollout, _created, _updated, _pid in _open_codex_threads(home["path"]):
                 if ("codex", str(thread_id)) in known:
                     continue
-                if trust and not all(trust.values()):
+                if not trusted:
                     why = "the xsm hooks are not trusted in %s; start codex and choose " \
                           "'Trust all and continue'" % home["path"]
                 elif not rollout or not os.path.exists(rollout):
@@ -515,27 +518,69 @@ def me(session_id: str | None = None, cwd: str | None = None):
 
 
 def _runtime_here(rows: list | None = None) -> str | None:
-    """Which runtime's shell this is: "claude", "codex", or None for a shell
+    """Which runtime's shell this is: "claude", "codex", "ambiguous" for a
+    shell carrying both ids that nothing attributes, or None for a shell
     that carries neither runtime's id.
 
     Each runtime sets its own id in the shells it runs, but leaves the other's
     alone: a Codex started from a shell a Claude session made (a tmux server
     first opened there, say) still carries that Claude's id, and took that
     session for itself (2026-09-27). With both set, the nearer agent process
-    decides; where the walk cannot run, that is the Codex sandbox, which
-    refuses `ps` ("operation not permitted", measured 2026-09-22) — a Claude
-    shell is never sandboxed that way."""
+    decides. Where the walk cannot run, that is not proof of Codex: a Claude
+    shell in its own OS sandbox is refused `ps` too (adversarial review,
+    2026-09-28), and a Claude started from a Codex shell carries that
+    thread's id — so _nested_runtime weighs what else there is."""
     own_session = os.environ.get("CLAUDE_CODE_SESSION_ID")
     thread = os.environ.get("CODEX_THREAD_ID")
     if not (own_session and thread):
         return "claude" if own_session else "codex" if thread else None
+    rows = rows if rows is not None else records()
     own = identity.ancestor_pid({"claude", "codex"})
     if not own:
-        return "codex"
-    rec = next((r for r in (rows if rows is not None else records()) if r.get("pid") == own), None)
+        return _nested_runtime(rows, own_session, thread)
+    rec = next((r for r in rows if r.get("pid") == own), None)
     if rec and rec.get("runtime") in ("claude", "codex"):
         return rec["runtime"]
     return "claude" if identity.comm(own) == "claude" else "codex"
+
+
+def _started(rec: dict | None) -> float | None:
+    try:
+        return time.mktime(time.strptime(rec["lstart"], "%a %b %d %H:%M:%S %Y"))
+    except (TypeError, KeyError, ValueError):
+        return None
+
+
+def _nested_runtime(rows: list, own_session: str, thread: str) -> str:
+    """The runtime of a shell carrying both ids when the process walk cannot
+    run. One of the two sessions was started from the other's shell, so:
+    a session whose process is gone is not the one running this; of two
+    live ones the later started is the inner one, the one whose shell this
+    is (both start times were taken by hooks, outside any sandbox); then
+    the sandbox markers each side sets (xsm's for a Claude worker, Codex's
+    own); then whichever id has a record. Only when none of that points
+    either way is the answer "ambiguous" — no record rather than another
+    session's."""
+    sock_pid = identity.pid_from_socket(os.environ.get("CLAUDE_CODE_MESSAGING_SOCKET") or "")
+    claude = next((r for r in rows if r.get("runtime") == "claude" and (
+        r.get("pid") == sock_pid if sock_pid else r.get("session_id") == own_session)), None)
+    codex = next((r for r in rows if r.get("runtime") == "codex"
+                  and r.get("session_id") == thread), None)
+    claude_pid = sock_pid or (claude or {}).get("pid")
+    if claude_pid and not identity.pid_alive(claude_pid):
+        return "codex"
+    if codex and not identity.pid_alive(codex.get("pid")):
+        return "claude"
+    ours, theirs = _started(claude), _started(codex)
+    if ours and theirs and ours != theirs:
+        return "claude" if ours > theirs else "codex"
+    if os.environ.get("XSM_SANDBOXED"):
+        return "claude"
+    if os.environ.get("CODEX_SANDBOX"):
+        return "codex"
+    if bool(claude) != bool(codex):
+        return "claude" if claude else "codex"
+    return "ambiguous"
 
 
 def _me(session_id: str | None, cwd: str | None) -> tuple:
@@ -555,6 +600,8 @@ def _me(session_id: str | None, cwd: str | None) -> tuple:
         rec = next((r for r in rows if r.get("session_id") == session_id), None)
         return (rec, "session_id") if rec else (None, "none:unregistered-session")
     runtime = _runtime_here(rows)
+    if runtime == "ambiguous":
+        return None, "none:ambiguous-runtime"
     if runtime == "codex":
         # Codex puts its thread id in every shell it runs, and the thread id is
         # what a Codex record is keyed by. Only that key counts: the process
@@ -606,6 +653,12 @@ def unregistered_reason() -> str:
     runtime is decided as `me` decides it: a Codex that inherited a Claude
     session id was told to install xsm into that Claude's home."""
     runtime = _runtime_here()
+    if runtime == "ambiguous":
+        return ("this shell carries both a Claude Code session id (%s) and a Codex thread id (%s) "
+                "- one runtime was started from the other's shell - and nothing here tells which "
+                "session runs it, so xsm will not sign as either; run it from the session's own "
+                "shell, or run `xsm doctor`" % (os.environ.get("CLAUDE_CODE_SESSION_ID"),
+                                                os.environ.get("CODEX_THREAD_ID")))
     if runtime == "codex":
         return ("this Codex thread (%s) is not registered yet: xsm's hooks register a thread at "
                 "its next prompt, so if they were just installed or trusted, send any message in "

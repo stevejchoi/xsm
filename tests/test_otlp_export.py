@@ -228,11 +228,19 @@ class CommandTest(TempState):
 
 
 class EndpointTest(TempState):
+    def setUp(self):
+        super().setUp()
+        # A shell that already exports a collector made the default read as
+        # that collector (review, 2026-09-28); the real value comes back after.
+        self.addCleanup(lambda v=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+                        os.environ.__setitem__("OTEL_EXPORTER_OTLP_ENDPOINT", v) if v is not None
+                        else os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None))
+        os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+
     def test_the_standard_variable_is_honoured(self):
         from xsm import otlp_export
         self.assertEqual(otlp_export.endpoint(), "http://localhost:4318")
         os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://collector:4318/"
-        self.addCleanup(os.environ.pop, "OTEL_EXPORTER_OTLP_ENDPOINT", None)
         self.assertEqual(otlp_export.endpoint(), "http://collector:4318")
         self.assertEqual(otlp_export.endpoint("http://other:4318"), "http://other:4318",
                          "an explicit endpoint wins")

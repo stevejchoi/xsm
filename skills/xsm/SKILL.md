@@ -82,8 +82,8 @@ queue` cannot run inside the sandbox, and the MCP server runs outside it. Send
 it with that tool, same target, kind and text. Do not retry the shell command
 and do not widen the sandbox.
 
-Two others are not breakage. `… is not registered yet` right after installing
-means the hooks register this session at its next prompt: have your user send
-any message, then retry; do not reinstall. A form tool can come back unseen by
-your user (Codex declines forms unshown under `approval_policy = "never"`);
-pass the result on as it is and do not call the tool again.
+Two others are not breakage. `… is not registered yet` just after installing
+or trusting the hooks means they register this session at its next prompt:
+have your user send any message, then retry; do not reinstall. A form tool can
+come back unseen by your user (Codex declines forms unshown under
+`approval_policy = "never"`); pass the result on as it is; do not call it again.
