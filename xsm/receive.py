@@ -206,6 +206,13 @@ def _handle(data: dict) -> dict | None:
                 # prune left it standing for a resume under a new pid (2026-09-28).
                 config.drop_reach(ended["ref"], session=ended)
         return None
+    if data.get("hook_event_name") == "UserPromptExpansion":
+        # Claude: the person typed a slash command. Its only use here is a
+        # typed `/xsm link <folder>` as their consent; the expansion itself
+        # goes on untouched, so nothing is printed.
+        if data.get("session_id"):
+            _record_consent(registry.by_session(runtime, data["session_id"]), data)
+        return None
     me = register(data, runtime)
     if me:
         # The pointer as written lacks what the runtime keeps elsewhere — a Codex
@@ -219,7 +226,10 @@ def _handle(data: dict) -> dict | None:
         return None
     parsed = envelope.parse(data.get("prompt") or "")
     if not parsed.peer:
-        return None                      # ordinary human input: say nothing
+        # Ordinary human input: say nothing. A Codex `$xsm link <folder>` (and
+        # join, leave, reach) is kept as the person's consent (consent.py).
+        _record_consent(me, data)
+        return None
     try:
         from . import telemetry
     except ImportError:
@@ -237,6 +247,18 @@ def _handle(data: dict) -> dict | None:
             telemetry.counter("xsm.receive.count", 1,
                               {"xsm.receive.decision": span.attributes.get("xsm.receive.decision")})
         return out
+
+
+def _record_consent(me: dict | None, data: dict) -> None:
+    """Keep a typed xsm command as the person's consent. A failure must not
+    touch the prompt, so it is only noted."""
+    try:
+        from . import consent
+        consent.record(me, data)
+    except Exception as err:            # noqa: BLE001 - never lock the person out
+        paths.append_jsonl("decisions.jsonl", {
+            "event": data.get("hook_event_name"), "decision": "pass",
+            "reason": "consent not recorded: %s" % type(err).__name__})
 
 
 def _gate(data: dict, runtime: str, me: dict | None, parsed, span=None) -> dict | None:
@@ -435,9 +457,10 @@ def main(argv=None) -> int:
                 "block" if looks_like_peer else "pass",
             "reason": "xsm internal error: %s" % type(err).__name__,
             "detail": str(err)[:300], "peer_like": looks_like_peer})
-        if (data or {}).get("hook_event_name") == "PermissionRequest":
+        if (data or {}).get("hook_event_name") in ("PermissionRequest", "UserPromptExpansion"):
             # No answer means the runtime's own default, which for a background
-            # worker is to refuse. Never print a prompt decision here.
+            # worker is to refuse. Never print a prompt decision here. An
+            # expansion is the person's own slash command: nothing to refuse.
             return 0
         if looks_like_peer:
             print(json.dumps({

@@ -23,7 +23,7 @@ import signal
 import sys
 import time
 
-from . import channel, identity, paths, registry
+from . import channel, consent, identity, paths, registry
 
 PROTOCOL = "2025-06-18"
 
@@ -84,6 +84,16 @@ TOOLS = [
          "wait": {"type": "number", "default": 0,
                   "description": "seconds to block until a message arrives (max 60 here; the "
                                  "shell `xsm inbox --wait` allows longer)"}}}},
+    {"name": "xsm_link",
+     "description": ("Link this session's project folder with another folder, so the sessions "
+                     "of both talk both ways until unlinked; one side is enough. The normal way "
+                     "to connect another folder. When your user typed `/xsm link <folder>` "
+                     "(Codex: `$xsm link <folder>`), that is their consent and no form is shown; "
+                     "otherwise this asks them with a form. drop=true unlinks without asking."),
+     "inputSchema": {"type": "object", "properties": {
+         "dir": {"type": "string", "description": "the other folder, e.g. ~/src/other-repo"},
+         "drop": {"type": "boolean", "default": False},
+         "reason": {"type": "string"}}, "required": ["dir"]}},
     {"name": "xsm_join",
      "description": ("Ask your user to let this session's folder join (or leave) a named xsm "
                      "project, so sessions in other repositories that also joined it can talk "
@@ -282,6 +292,8 @@ class Server:
             return self.join(me, args)
         if name == "xsm_reach":
             return self.reach(me, args)
+        if name == "xsm_link":
+            return self.link(me, args)
         if name == "xsm_send":
             from . import send as send_mod
             r = send_mod.send(args.get("target") or "", args.get("text") or "", sender=me,
@@ -363,6 +375,52 @@ class Server:
         return "endorsed: node %s now carries %s; run `xsm doc render %s`" % (
             new["id"], node["id"], args.get("doc"))
 
+    def allowed(self, question: str, command: str) -> tuple:
+        """Ask the person allow/deny. Returns (True, None) on their allow, else
+        (False, what to tell the agent)."""
+        if "elicitation" not in (self.client_caps or {}):
+            raise channel.ChannelError("this client cannot ask its user; they can run "
+                                       "`%s` in a terminal" % command)
+        reply = self.ask_client("elicitation/create", {"message": question, "requestedSchema": {
+            "type": "object", "properties": {"answer": {"type": "string", "title": "Permission",
+                                                        "enum": ["allow", "deny"]}},
+            "required": ["answer"]}})
+        answer, why = self.answer(reply, ["allow", "deny"])
+        if answer == "allow":
+            return True, None
+        if answer == "deny":
+            return False, "your user declined: they chose 'deny'; do not work around it"
+        return False, ("your user did not answer (%s); do not work around it. If the form did not "
+                       "reach them, they can run `%s` in a terminal instead" % (why, command))
+
+    def link(self, me: dict, args: dict) -> str:
+        from . import config
+        if not args.get("dir"):
+            raise channel.ChannelError("dir: the folder to link with")
+        here = me.get("cwd") or os.getcwd()
+        root = config.project_root(here)
+        # Relative to the session, like reach: the form, the command and the
+        # link all name the same absolute root.
+        other = config.project_root(os.path.join(here, os.path.expanduser(args["dir"])))
+        if args.get("drop"):
+            return ("unlinked %s and %s" % (root, other)) if config.drop_link(root, other) \
+                else "%s and %s were not linked" % (root, other)
+        if not consent.take(me, "link", other, here):
+            command = "xsm link %s --dir %s" % (shlex.quote(other), shlex.quote(root))
+            ok, refusal = self.allowed(
+                "%s@%s asks to link %s with %s: the sessions of both folders talk, both ways, "
+                "until unlinked.%s\nAllow it?" % (
+                    me.get("name"), me.get("alias"), root, other,
+                    ("\nReason: " + args["reason"]) if args.get("reason") else ""), command)
+            if not ok:
+                return refusal
+        try:
+            entry, added = config.add_link(root, other, os.environ.get("USER") or "person")
+        except ValueError as exc:
+            raise channel.ChannelError(str(exc))
+        return ("%s: the sessions in %s and %s can talk, both ways, until unlinked; run `xsm list` "
+                "to see them" % ("linked" if added else "already linked", root, other))
+
     def join(self, me: dict, args: dict) -> str:
         from . import config
         project, leaving = (args.get("project") or "").strip(), bool(args.get("leave"))
@@ -370,22 +428,13 @@ class Server:
         verb = "leave" if leaving else "join"
         # What the person can type instead; --dir names the folder asked about.
         command = "xsm %s %s --dir %s" % (verb, shlex.quote(project), shlex.quote(root))
-        if "elicitation" not in (self.client_caps or {}):
-            raise channel.ChannelError("this client cannot ask its user; they can run "
-                                       "`%s` in a terminal" % command)
-        question = ("%s@%s asks to let %s %s the xsm project %r.%s\nAllow it?" % (
-            me.get("name"), me.get("alias"), root, verb, project,
-            ("\nReason: " + args["reason"]) if args.get("reason") else ""))
-        reply = self.ask_client("elicitation/create", {"message": question, "requestedSchema": {
-            "type": "object", "properties": {"answer": {"type": "string", "title": "Permission",
-                                                        "enum": ["allow", "deny"]}},
-            "required": ["answer"]}})
-        answer, why = self.answer(reply, ["allow", "deny"])
-        if answer == "deny":
-            return "your user declined: they chose 'deny'; the folder's projects are unchanged"
-        if answer != "allow":
-            return ("your user did not answer (%s); the folder's projects are unchanged. If the "
-                    "form did not reach them, they can run `%s` in a terminal instead" % (why, command))
+        if not consent.take(me, verb, project):       # the person typed /xsm join <project>
+            ok, refusal = self.allowed(
+                "%s@%s asks to let %s %s the xsm project %r.%s\nAllow it?" % (
+                    me.get("name"), me.get("alias"), root, verb, project,
+                    ("\nReason: " + args["reason"]) if args.get("reason") else ""), command)
+            if not ok:
+                return refusal + "; the folder's projects are unchanged"
         try:
             if leaving:
                 changed = config.leave(project, me.get("cwd") or os.getcwd())
@@ -411,23 +460,14 @@ class Server:
             return "dropped %d reach(es)" % config.drop_reach(me.get("ref"), root, session=me)
         command = "xsm reach %s --session %s" % (shlex.quote(root),
                                                  shlex.quote("ref:%s" % me.get("ref")))
-        if "elicitation" not in (self.client_caps or {}):
-            raise channel.ChannelError("this client cannot ask its user; they can run "
-                                       "`%s` in a terminal" % command)
-        question = ("%s@%s (%s) asks to talk with the sessions in %s, both ways, until it "
-                    "ends.%s\nAllow it?" % (
-                        me.get("name"), me.get("alias"), me.get("ref"), root,
-                        ("\nReason: " + args["reason"]) if args.get("reason") else ""))
-        reply = self.ask_client("elicitation/create", {"message": question, "requestedSchema": {
-            "type": "object", "properties": {"answer": {"type": "string", "title": "Permission",
-                                                        "enum": ["allow", "deny"]}},
-            "required": ["answer"]}})
-        answer, why = self.answer(reply, ["allow", "deny"])
-        if answer == "deny":
-            return "your user declined: they chose 'deny'; do not work around it"
-        if answer != "allow":
-            return ("your user did not answer (%s); do not work around it. If the form did not "
-                    "reach them, they can run `%s` in a terminal instead" % (why, command))
+        if not consent.take(me, "reach", root):        # the person typed /xsm reach <dir>
+            ok, refusal = self.allowed(
+                "%s@%s (%s) asks to talk with the sessions in %s, both ways, until it ends.%s\n"
+                "Allow it?" % (me.get("name"), me.get("alias"), me.get("ref"), root,
+                               ("\nReason: " + args["reason"]) if args.get("reason") else ""),
+                command)
+            if not ok:
+                return refusal
         try:
             entry, added = config.add_reach(me.get("ref"), root,
                                             os.environ.get("USER") or "person", session=me)

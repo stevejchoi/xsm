@@ -14,7 +14,7 @@ import shutil
 import sys
 import time
 
-from . import config, envelope, housekeeping, inbox, install, ledger, paths, receive, registry, \
+from . import config, consent, envelope, housekeeping, inbox, install, ledger, paths, receive, registry, \
     resolve, send, workers
 
 OK, REFUSED, UNCONFIRMED, USAGE = 0, 2, 3, 4
@@ -26,7 +26,7 @@ def _here(args, me=None) -> str:
     that changes or writes on a folder's behalf takes --dir only from a person:
     otherwise one agent could speak for another project (ADR-0009)."""
     if getattr(args, "dir", None):
-        if args.command in ("join", "leave", "post") and not workers.human_terminal():
+        if args.command in ("join", "leave", "post", "link") and not workers.human_terminal():
             raise SystemExit("refused: --dir speaks for another folder; only a person at a "
                              "terminal may use it with %s" % args.command)
         return os.path.realpath(os.path.expanduser(args.dir))
@@ -283,16 +283,25 @@ def _print_members(scope: dict, root: str) -> None:
         print("  %s%s" % (_home_tilde(m.get("root", "")), "  (this project)" if mine else ""))
 
 
-def _person_or_refuse(what: str, mcp_tool: str) -> str | None:
-    """Changing who may talk to whom is the user's decision (ADR-0009)."""
+def _person_or_refuse(what: str, mcp_tool: str, typed: tuple | None = None) -> str | None:
+    """Changing who may talk to whom is the user's decision (ADR-0009). A
+    person at this terminal decides; so does the command the person typed
+    into the session running this (`typed` = (verb, target[, here]), see
+    consent.py), used up here."""
     if workers.human_terminal():
         return None
+    if typed and consent.take(registry.me(), *typed):
+        return None
+    if typed:
+        return ("%s is your user's decision: they type `/xsm %s %s` in this session (Codex: "
+                "`$xsm %s %s`), or run it in a terminal; or ask them with the %s MCP tool" % (
+                    what, typed[0], typed[1], typed[0], typed[1], mcp_tool))
     return ("%s is your user's decision: ask them with the %s MCP tool (it shows them a form), "
             "or they run it in a terminal" % (what, mcp_tool))
 
 
 def cmd_join(args) -> int:
-    why = _person_or_refuse("joining a project", "xsm_join")
+    why = _person_or_refuse("joining a project", "xsm_join", ("join", args.project))
     if why:
         print("refused: %s" % why, file=sys.stderr)
         return REFUSED
@@ -325,7 +334,7 @@ def cmd_join(args) -> int:
 
 
 def cmd_leave(args) -> int:
-    why = _person_or_refuse("leaving a project", "xsm_join (with leave)")
+    why = _person_or_refuse("leaving a project", "xsm_join (with leave)", ("leave", args.project))
     if why:
         print("refused: %s" % why, file=sys.stderr)
         return REFUSED
@@ -372,7 +381,10 @@ def cmd_reach(args) -> int:
         n = config.drop_reach(me["ref"], args.folder, session=me)
         print("dropped %d reach(es) of ref:%s" % (n, me["ref"]))
         return OK
-    why = _person_or_refuse("letting a session reach another folder", "xsm_reach")
+    # The typed command is consent only for the session that typed it.
+    caller = registry.me()
+    typed = ("reach", args.folder) if caller and caller.get("ref") == me.get("ref") else None
+    why = _person_or_refuse("letting a session reach another folder", "xsm_reach", typed)
     if why:
         print("refused: %s" % why, file=sys.stderr)
         return REFUSED
@@ -385,6 +397,54 @@ def cmd_reach(args) -> int:
     print("%s: %s@%s [%s] can talk with the sessions in %s while it runs" % (
         "allowed" if added else "already allowed", me.get("name"), me.get("alias"), me["ref"],
         _home_tilde(entry["root"])))
+    return OK
+
+
+def _links_here(root: str) -> list:
+    """The folders linked with this project folder."""
+    out = []
+    for ln in config.links():
+        a, b = os.path.realpath(ln.get("a") or ""), os.path.realpath(ln.get("b") or "")
+        if root in (a, b):
+            out.append(b if a == root else a)
+    return out
+
+
+def cmd_link(args) -> int:
+    """Link this project folder with another one, both ways, until unlinked."""
+    here = _here(args)
+    root = config.project_root(here)
+    if not args.folder:
+        rows = config.links()
+        if not rows:
+            print("no links. Link another folder with: /xsm link <folder>  (Codex: $xsm link "
+                  "<folder>)")
+        for ln in rows:
+            mine = root in (os.path.realpath(ln.get("a") or ""), os.path.realpath(ln.get("b") or ""))
+            print("%s <-> %s%s" % (_home_tilde(ln.get("a", "")), _home_tilde(ln.get("b", "")),
+                                   "  (this folder)" if mine else ""))
+        return OK
+    other = config.project_root(os.path.join(here, os.path.expanduser(args.folder)))
+    if args.command == "unlink":
+        # Narrowing: anyone may.
+        if config.drop_link(here, other):
+            print("unlinked: %s and %s" % (_home_tilde(root), _home_tilde(other)))
+            return OK
+        print("no link between %s and %s" % (_home_tilde(root), args.folder), file=sys.stderr)
+        return REFUSED
+    why = _person_or_refuse("linking two folders", "xsm_link", ("link", other, here))
+    if why:
+        print("refused: %s" % why, file=sys.stderr)
+        return REFUSED
+    try:
+        entry, added = config.add_link(here, other, os.environ.get("USER") or "person")
+    except ValueError as exc:
+        print("refused: %s" % exc, file=sys.stderr)
+        return USAGE
+    there = entry["b"] if os.path.realpath(entry["a"]) == root else entry["a"]
+    print("%s: the sessions in %s and in %s can talk, both ways, until `xsm unlink %s`" % (
+        "linked" if added else "already linked", _home_tilde(root), _home_tilde(there),
+        _home_tilde(there)))
     return OK
 
 
@@ -444,14 +504,20 @@ def cmd_projects(args) -> int:
                 table.append((scope.get("id") if i == 0 else "",
                               _home_tilde(m.get("root", "")) + (" (this folder)" if mine else ""),
                               ""))
+        for other in _links_here(root):
+            table.append(("linked", _home_tilde(other), ""))
         print("\n".join(_md_table(["project", "folder", "member of"], table)))
-        if not config.projects():
-            print("\nNo named projects yet. Join one with `/xsm join <name>` (Codex: `$xsm join <name>`).")
+        if not config.projects() and not _links_here(root):
+            print("\nNo links or named projects yet. Connect another folder with `/xsm link <folder>` "
+                  "(Codex: `$xsm link <folder>`).")
         return OK
     print("this folder (%s) is in: %s" % (_home_tilde(root), ", ".join(_memberships(here))))
+    for other in _links_here(root):
+        print("linked with: %s" % _home_tilde(other))
     rows = config.projects()
     if not rows:
-        print("no named projects. Join one with: /xsm join <name>  (or xsm join <name>)")
+        print("no named projects. Connect another folder with: /xsm link <folder>  (or xsm link "
+              "<folder>); a group of several folders: /xsm join <name>")
         return OK
     print("named projects:")
     for scope in rows:
@@ -1514,6 +1580,17 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--reason")
         sp.set_defaults(func=cmd_answer)
 
+    for verb, helptext in (
+            ("link", "link this project folder with another, both ways, until unlinked (a person "
+                     "only); no folder: list links"),
+            ("unlink", "take a link away (anyone)")):
+        lk = sub.add_parser(verb, help=helptext)
+        if verb == "link":
+            lk.add_argument("folder", nargs="?")
+        else:
+            lk.add_argument("folder")
+        lk.add_argument("--dir", help="this side's folder (default: this session's)")
+        lk.set_defaults(func=cmd_link)
     rc = sub.add_parser("reach", help="let one session talk with the sessions of another folder "
                                       "while it runs (a person only); no folder: list them")
     rc.add_argument("folder", nargs="?")

@@ -111,17 +111,25 @@ $xsm list                            # Codex
 /xsm send ref:a1b2c3 이것 좀 봐줘      # 대상 다음은 모두 메시지
 ```
 
-명령은 `list`, `who`, `log`, `projects`, `doctor`, `send`, `join`, `leave`, `reach`입니다. 인자 없이 부르면
+명령은 `list`, `who`, `log`, `projects`, `doctor`, `send`, `link`, `join`, `leave`, `reach`입니다. 인자 없이 부르면
 사용법 한 줄이 나옵니다. 말로 부탁하면("저쪽 세션에 물어봐") 에이전트가 같은 스킬의 참고 문서를 읽고
 직접 `xsm`을 실행합니다.
 
 ### 통신 범위
 
-같은 Git 저장소 안의 세션끼리는 하위 폴더가 달라도 통합니다. Git 저장소 밖에서는 같은 폴더의 세션끼리 통합니다. 다른 폴더까지 묶으려면 양쪽이 같은 이름으로 참여해야 합니다.
+같은 Git 저장소 안의 세션끼리는 하위 폴더가 달라도 통합니다. Git 저장소 밖에서는 같은 폴더의 세션끼리 통합니다. 다른 폴더와 연결하려면 어느 한쪽 세션에서 아래처럼 입력합니다. 한쪽이면 충분하고, 연결은 양방향이며 풀기 전까지 유지됩니다.
 
 ```bash
-xsm join my-project                  # 양쪽에서 각각 실행
-xsm projects                         # 어떤 폴더들이 묶여 있는지
+/xsm link ~/src/other-repo           # 세션 안에서 (Codex: $xsm link ...). 직접 입력한 명령이 곧 동의입니다
+xsm link ~/src/other-repo            # 또는 터미널에서
+xsm unlink ~/src/other-repo          # 해제는 누구나 할 수 있습니다
+```
+
+여러 폴더를 한 묶음으로 두려면 각 폴더가 같은 이름으로 참여합니다.
+
+```bash
+xsm join my-project                  # 각 폴더에서 실행
+xsm projects                         # 어떤 폴더들이 참여·연결되어 있는지
 ```
 
 가입 없이 한 세션만 다른 폴더의 세션들과 통하게 하려면 사용자가 reach를 허락합니다. 그 세션이 끝나면 사라집니다.
@@ -239,8 +247,8 @@ xsm who                                        # 이 세션이 어떻게 보이�
 ### 2. 다른 저장소 세션과 연결
 
 ```bash
-xsm join my-project                            # 양쪽 저장소에서 각각
-xsm projects                                   # 어떤 폴더들이 묶였는지
+/xsm link ~/src/other-repo                     # 어느 한쪽 세션에서 (Codex: $xsm link ...)
+xsm projects                                   # 어떤 폴더들이 연결·참여되어 있는지
 ```
 
 ### 3. 메시지 보내고 답장 받기

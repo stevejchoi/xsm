@@ -1,7 +1,7 @@
 ---
 name: xsm
-description: Talk to other Claude Code or Codex sessions on this machine — list them, send a message or a task, answer one, start workers, and see what was delivered. Use when the user asks to contact, hand off to, or coordinate with another session or agent. Your user calls it as `/xsm <command>` in Claude Code and `$xsm <command>` in Codex (list, who, log, projects, doctor, send, join, leave, reach); you run the `xsm` shell command (`xsm list`, `xsm send <name|ref:xxxxxx> --text "..."`). Load this skill before naming any other xsm command or address, or before acting on an xsm refusal — a made-up address is a message nobody receives. From a sandboxed shell, reach a Codex session with the `xsm_send` MCP tool instead; a row whose ref is `[-]` has no address yet.
-argument-hint: "list | who | log | projects | doctor | send <target> <message> | join <project> | leave <project> | reach <folder>"
+description: Talk to other Claude Code or Codex sessions on this machine — list them, send a message or a task, answer one, start workers, and see what was delivered. Use when the user asks to contact, hand off to, or coordinate with another session or agent. Your user calls it as `/xsm <command>` in Claude Code and `$xsm <command>` in Codex (list, who, log, projects, doctor, send, link, join, leave, reach); you run the `xsm` shell command (`xsm list`, `xsm send <name|ref:xxxxxx> --text "..."`). Load this skill before naming any other xsm command or address, or before acting on an xsm refusal — a made-up address is a message nobody receives. From a sandboxed shell, reach a Codex session with the `xsm_send` MCP tool instead; a row whose ref is `[-]` has no address yet.
+argument-hint: "list | who | log | projects | doctor | send <target> <message> | link <folder> | join <project> | leave <project> | reach <folder>"
 allowed-tools: Bash(xsm list --table), Bash(xsm who --table), Bash(xsm projects --table), Bash(xsm doctor --table), Bash(xsm ledger --table --mine --last 5), Bash(xsm held list --table)
 ---
 
@@ -50,22 +50,22 @@ inside one code block. If it fails with `sandbox-blocked`, call the MCP tool
 `xsm_send` with the same target and text instead, and reply with its result the
 same way.
 
-**`join <project>`** / **`leave <project>`** — call the MCP tool `xsm_join` with
-`project` set to the word after it (and `leave` set to true for `leave`). It
-asks your user in a form; only their choice counts. Call it once and reply with
-its result, copied exactly, inside one code block: it says who answered, and a
-terminal command when the form did not reach them. Say your user refused only
-if it says they chose `deny`.
+**`link <folder>`** — call the MCP tool `xsm_link` with `dir` set to the folder
+(both folders, both ways, until unlinked; what your user typed is the consent).
 
-**`reach <folder>`** — call the MCP tool `xsm_reach` with `dir` set to the
-folder. It asks your user to let this session alone talk with the sessions
-started in that folder, both ways, until this session ends. Reply with the
-tool's result, copied exactly, inside one code block, and call it once, as for
-`join`.
+**`join <project>`** / **`leave <project>`** — call `xsm_join` with `project`
+set to the word after it (and `leave` true for `leave`).
+
+**`reach <folder>`** — call `xsm_reach` with `dir` set to the folder (this
+session alone, until it ends).
+
+For these four: call the tool once and reply with its result, copied exactly,
+inside one code block: it says who answered, and a terminal command when a form
+did not reach them. Say your user refused only if it says they chose `deny`.
 
 **Your user typed `/xsm` or `$xsm` with no command, or one not listed here** —
 reply with exactly:
-usage: /xsm list | who | log | projects | doctor | send <target> <message> | join <project> | leave <project> | reach <folder>
+usage: /xsm list | who | log | projects | doctor | send <target> <message> | link <folder> | join <project> | leave <project> | reach <folder>
 
 ## Called without one
 

@@ -116,19 +116,27 @@ $xsm list                            # Codex
 /xsm send ref:a1b2c3 please take a look   # everything after the target is the message
 ```
 
-The commands are `list`, `who`, `log`, `projects`, `doctor`, `send`, `join`, `leave` and `reach`. Called with no
+The commands are `list`, `who`, `log`, `projects`, `doctor`, `send`, `link`, `join`, `leave` and `reach`. Called with no
 command, it prints a one-line usage. If you ask in words ("ask the other session"), the agent reads the
 skill's guide and runs `xsm` itself.
 
 ### Communication scope
 
 Sessions in the same Git repository can talk to each other, even when they run from different subfolders.
-Outside a Git repository, sessions in the same folder can talk. To connect other folders, both sides join
-under the same name.
+Outside a Git repository, sessions in the same folder can talk. To connect another folder, type this in a
+session on either side; one side is enough, and the link holds both ways until you unlink it:
 
 ```bash
-xsm join my-project                  # run on each side
-xsm projects                         # which folders are joined
+/xsm link ~/src/other-repo           # in a session (Codex: $xsm link ...); your typed command is the consent
+xsm link ~/src/other-repo            # or in a terminal
+xsm unlink ~/src/other-repo          # anyone may take it away
+```
+
+For a group of several folders, each of them joins the same name:
+
+```bash
+xsm join my-project                  # run in each folder
+xsm projects                         # which folders are joined or linked
 ```
 
 To let just one session talk with the sessions of another folder, without joining anything,
@@ -248,8 +256,8 @@ xsm who                                        # how this session appears
 ### 2. Connecting to a session in another repository
 
 ```bash
-xsm join my-project                            # in each repository
-xsm projects                                   # which folders are joined
+/xsm link ~/src/other-repo                     # in a session on either side (Codex: $xsm link ...)
+xsm projects                                   # which folders are linked or joined
 ```
 
 ### 3. Sending a message and getting a reply

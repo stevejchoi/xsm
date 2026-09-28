@@ -740,7 +740,8 @@ class PluginPackagingTest(TempState):
     def test_the_hooks_manifest_covers_every_event_the_gate_needs(self):
         hooks = self._json("hooks", "hooks.json")["hooks"]
         self.assertEqual(sorted(hooks),
-                         ["PermissionRequest", "SessionEnd", "SessionStart", "UserPromptSubmit"])
+                         ["PermissionRequest", "SessionEnd", "SessionStart", "UserPromptExpansion",
+                          "UserPromptSubmit"])
         for event, groups in hooks.items():
             for group in groups:
                 for hook in group["hooks"]:

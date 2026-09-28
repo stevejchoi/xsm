@@ -120,13 +120,44 @@ def scope_for(a: dict, b: dict, cfg: dict | None = None):
     scope, reason = _scope_for(a, b, cfg)
     if scope:
         return scope, reason
+    link = _folder_link(a, b, cfg)
+    if link:
+        return link, "two folders your user linked"
     link = _worker_link(a, b)
     if link:
         return link, "a worker and the session that started it"
     link = _reach_link(a, b, cfg)
     if link:
         return link, "a reach your user allowed"
-    return None, reason + _half_joined(a, b, cfg) + _reach_hint(a, b)
+    return None, reason + _link_hint(a, b) + _half_joined(a, b, cfg) + _reach_hint(a, b)
+
+
+def _folder_link(a: dict, b: dict, cfg: dict) -> str | None:
+    """Two project folders a person linked (`xsm link`): every session under
+    one and every session under the other, both ways, until unlinked."""
+    for ln in cfg.get("links") or []:
+        ra, rb = ln.get("a"), ln.get("b")
+        if not (ra and rb):
+            continue
+        for x, y in ((a, b), (b, a)):
+            if member_matches({"root": ra}, x) and member_matches({"root": rb}, y):
+                return link_id(ra, rb)
+    return None
+
+
+def link_id(root_a: str, root_b: str) -> str:
+    """The same id from either side: the two roots' basenames, in the order
+    of their full paths."""
+    pair = sorted(os.path.realpath(os.path.expanduser(r)) for r in (root_a, root_b))
+    return "link:" + "+".join(os.path.basename(r.rstrip("/")) for r in pair)
+
+
+def _link_hint(a: dict, b: dict) -> str:
+    if not (a.get("cwd") and b.get("cwd")):
+        return ""
+    there = project_root(b["cwd"])
+    return ("; to connect the two folders, your user types /xsm link %s (Codex: $xsm link %s) "
+            "in the session at %s" % (there, there, project_root(a["cwd"])))
 
 
 def _reach_link(a: dict, b: dict, cfg: dict) -> str | None:
@@ -316,6 +347,64 @@ def leave(name: str, cwd: str) -> bool:
         _save(raw)
         return True
     return False
+
+
+# --- links: two project folders, both ways, until unlinked ---------------------------
+#
+# User decision (2026-09-28): one side is enough. A tester could not connect two
+# repositories because a project needed `xsm join` from both folders, each
+# through a form Codex may decline without showing it. A link is written once,
+# from either folder, by a person (their terminal, or the command they typed in
+# the session: see consent.py). It widens, so only a person adds one; it
+# narrows when dropped, so anyone may drop it.
+
+def links() -> list:
+    return list(load().get("links") or [])
+
+
+def _link_roots(folder_a: str, folder_b: str) -> tuple:
+    ra = project_root(os.path.expanduser(folder_a))
+    rb = project_root(os.path.expanduser(folder_b))
+    for folder, root in ((folder_a, ra), (folder_b, rb)):
+        if not os.path.isdir(root):
+            raise ValueError("%s is not a folder" % folder)
+    if ra == rb:
+        raise ValueError("%s and %s are the same project already" % (folder_a, folder_b))
+    return ra, rb
+
+
+def _same_link(entry: dict, ra: str, rb: str) -> bool:
+    pair = {os.path.realpath(entry.get("a") or ""), os.path.realpath(entry.get("b") or "")}
+    return pair == {ra, rb}
+
+
+def add_link(folder_a: str, folder_b: str, by: str) -> tuple:
+    """Link the projects of two folders. Returns (entry, added)."""
+    ra, rb = _link_roots(folder_a, folder_b)
+    raw = _raw()
+    rows = raw.setdefault("links", [])
+    for entry in rows:
+        if _same_link(entry, ra, rb):
+            return entry, False
+    entry = {"a": ra, "b": rb, "t": time.time(), "by": by}
+    rows.append(entry)
+    _save(raw)
+    return entry, True
+
+
+def drop_link(folder_a: str, folder_b: str) -> bool:
+    ra = project_root(os.path.expanduser(folder_a))
+    rb = project_root(os.path.expanduser(folder_b))
+    raw = _raw()
+    rows = raw.get("links") or []
+    kept = [e for e in rows if not _same_link(e, ra, rb)]
+    if len(kept) == len(rows):
+        return False
+    raw["links"] = kept
+    if not kept:
+        raw.pop("links")
+    _save(raw)
+    return True
 
 
 # --- reaches: one session to one other folder -----------------------------------------

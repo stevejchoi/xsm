@@ -31,7 +31,10 @@ FILE_MARKER = "<!-- xsm-managed -->"        # command files earlier versions wro
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # SessionEnd lets a clean exit read as `ended` rather than `stale`. Codex has
 # no SessionEnd event, so a stopped Codex session always reads as stale.
-CLAUDE_EVENTS = ("SessionStart", "UserPromptSubmit", "SessionEnd")
+# UserPromptExpansion fires only for a slash command the person typed, never
+# for a peer message, so it is where a typed `/xsm link` is taken as consent
+# (consent.py, 2026-09-28).
+CLAUDE_EVENTS = ("SessionStart", "UserPromptSubmit", "UserPromptExpansion", "SessionEnd")
 # No PermissionRequest for Codex: Codex has no such hook event to relay a
 # question through, so a background Codex worker runs with approvals off
 # inside its sandbox instead. Background Claude workers get theirs from their
