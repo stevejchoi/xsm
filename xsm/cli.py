@@ -245,6 +245,10 @@ def _md_table(headers: list, rows: list) -> list:
 
 
 def cmd_who(args) -> int:
+    # The same adoption `list` runs first. Without it `who` said "not
+    # registered", then `list` adopted the thread and marked its row `you`,
+    # then `who` found it: two answers to one question (review, 2026-09-28).
+    registry.adopt_open_codex()
     me = registry.me()
     if not me:
         print(registry.unregistered_reason(), file=sys.stderr)

@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import datetime
 import glob
+import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -249,29 +251,149 @@ def install_skill(home: str, refresh: bool = False) -> tuple:
     return "linked", target
 
 
+# Codex's label for each event in a hook-state key and in the trust hash
+# (codex-rs/hooks/src/lib.rs, hook_event_key_label, Codex 0.158).
+CODEX_EVENT_KEYS = {"PreToolUse": "pre_tool_use", "PermissionRequest": "permission_request",
+                    "PostToolUse": "post_tool_use", "PreCompact": "pre_compact",
+                    "PostCompact": "post_compact", "SessionStart": "session_start",
+                    "SessionEnd": "session_end", "UserPromptSubmit": "user_prompt_submit",
+                    "SubagentStart": "subagent_start", "SubagentStop": "subagent_stop",
+                    "Stop": "stop", "Interrupt": "interrupt"}
+
+
+def codex_hook_hash(event: str, group: dict, handler: dict) -> str | None:
+    """The hash Codex compares with a hook's trusted_hash, for one command hook
+    from hooks.json; None for anything we cannot hash the way Codex does.
+
+    Codex hashes the normalized hook, not the file text (Codex 0.158,
+    codex-rs/hooks/src/engine/discovery.rs, hook_hash): the event's key label,
+    the group's matcher (dropped for events that take none), and this one
+    handler with its timeout defaulted — 600 s, or clamped to 1..3 s for
+    SessionEnd and Interrupt — commandWindows dropped, and
+    additionalContextLimit kept only where the event can emit context and it
+    is not the 2500 default. That value goes through TOML to JSON with sorted
+    keys and no spaces, then sha256 (codex-rs/config/src/fingerprint.rs,
+    version_for_toml). Checked 2026-09-28 against every trusted_hash in three
+    real Codex homes on this machine: 15 of 15 equal."""
+    if (not isinstance(handler, dict) or handler.get("type") != "command"
+            or event not in CODEX_EVENT_KEYS or not isinstance(handler.get("command"), str)):
+        return None
+    timeout = handler.get("timeout")
+    if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, int)
+                                or timeout < 0):
+        return None                     # Codex would not load a hooks.json like that
+    if event in ("SessionEnd", "Interrupt"):
+        timeout = min(max(1 if timeout is None else timeout, 1), 3)
+    else:
+        timeout = max(600 if timeout is None else timeout, 1)
+    normalized = {"type": "command", "command": handler["command"], "timeout": timeout,
+                  "async": bool(handler.get("async", False))}
+    if handler.get("statusMessage") is not None:
+        normalized["statusMessage"] = handler["statusMessage"]
+    limit = handler.get("additionalContextLimit")
+    if limit is not None and limit != 2500 and event in (
+            "PreToolUse", "PostToolUse", "SessionStart", "UserPromptSubmit", "SubagentStart"):
+        normalized["additionalContextLimit"] = limit
+    ident = {"event_name": CODEX_EVENT_KEYS[event], "hooks": [normalized]}
+    matcher = None if event in ("UserPromptSubmit", "Stop", "Interrupt") else group.get("matcher")
+    if matcher is not None:
+        ident["matcher"] = matcher
+    text = json.dumps(ident, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+_STATE_HEADER = re.compile(
+    r"""^\[\s*hooks\s*\.\s*state\s*\.\s*("(?:[^"\\]|\\.)*"|'[^']*')\s*\]\s*(?:#.*)?$""")
+_STATE_VALUE = re.compile(
+    r"""^(enabled|trusted_hash)\s*=\s*(true|false|"(?:[^"\\]|\\.)*"|'[^']*')\s*(?:#.*)?$""")
+
+
+def _toml_string(token: str):
+    if token.startswith("'"):
+        return token[1:-1]
+    try:
+        return json.loads(token)            # TOML basic-string escapes are JSON's, bar \U
+    except ValueError:
+        return None
+
+
+def codex_hook_states(config_text: str) -> dict:
+    """{hook-state key: {"enabled": bool, "trusted_hash": str}} (each field
+    only when set) from a Codex config.toml.
+
+    tomllib where there is one (3.11+). The pinned interpreter may be 3.9
+    (see config.py), so without it only the form Codex itself writes — one
+    [hooks.state."<key>"] table per hook — is read; any other spelling counts
+    as no state, which reads as not trusted rather than trusted."""
+    try:
+        import tomllib
+    except ImportError:
+        tomllib = None
+    if tomllib is not None:
+        try:
+            state = (tomllib.loads(config_text).get("hooks") or {}).get("state") or {}
+        except (tomllib.TOMLDecodeError, AttributeError):
+            return {}
+        if not isinstance(state, dict):
+            return {}
+        return {k.strip(): v for k, v in state.items() if isinstance(v, dict)}
+    out, current = {}, None
+    for raw in config_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("["):
+            header = _STATE_HEADER.match(line)
+            key = _toml_string(header.group(1)) if header else None
+            current = out.setdefault(key.strip(), {}) if key else None
+            continue
+        value = _STATE_VALUE.match(line) if current is not None else None
+        if value:
+            field, token = value.groups()
+            current[field] = token == "true" if token in ("true", "false") else _toml_string(token)
+    return out
+
+
 def codex_trust(home: str, approvals: bool = False) -> dict:
-    """Whether Codex has trusted the xsm hook groups in this home.
+    """Whether Codex will run the xsm hook groups in this home.
 
     Codex records trust in config.toml as
-    [hooks.state."<abs path to hooks.json>:<event>:<group>:<hook>"] trusted_hash = …
-    (found by reading real configs). An untrusted hook simply never runs, which
-    from the outside looks exactly like a session that never registered.
-    Returns {event: True/False} for the events that carry our groups.
+    [hooks.state."<abs path to hooks.json>:<event>:<group>:<hook>"]
+    trusted_hash = "sha256:…" (enabled = false switches a hook off), and runs
+    a hook only when it is not switched off and trusted_hash equals the hash
+    of the hook as it is now (Codex 0.158, discovery.rs: hook_enabled,
+    hook_trust_status). Until 2026-09-28 the text "trusted_hash" near the key
+    was taken as trust, so a hook edited since it was trusted, or switched
+    off, read as trusted and adopt_open_codex registered sessions whose hooks
+    never run. An untrusted hook simply never runs, which from the outside
+    looks exactly like a session that never registered.
+    Returns {event: True/False} for the events that carry our groups; False
+    wherever the evidence is missing.
     """
-    home = os.path.realpath(os.path.expanduser(home))
-    hooks_file = os.path.join(home, "hooks.json")
+    given = os.path.join(os.path.expanduser(home), "hooks.json")
+    hooks_file = os.path.join(os.path.realpath(os.path.expanduser(home)), "hooks.json")
+    # Codex keys the state by the hooks.json path as it found it; a home
+    # reached through a symlink may carry either spelling.
+    spellings = [hooks_file] + ([given] if given != hooks_file else [])
     data = paths.read_json(hooks_file, {}) or {}
-    config_text = _read_text(os.path.join(home, "config.toml")) or ""
-    snake = {"SessionStart": "session_start", "UserPromptSubmit": "user_prompt_submit"}
-    if approvals:
-        snake["PermissionRequest"] = "permission_request"
+    states = codex_hook_states(_read_text(os.path.join(os.path.dirname(hooks_file),
+                                                       "config.toml")) or "")
+    events = ["SessionStart", "UserPromptSubmit"] + (["PermissionRequest"] if approvals else [])
     out = {}
-    for event, key in snake.items():
+    for event in events:
         for index, group in enumerate((data.get("hooks") or {}).get(event, [])):
-            if _is_ours(group):
-                marker = '[hooks.state."%s:%s:%d:0"]' % (hooks_file, key, index)
-                at = config_text.find(marker)
-                out[event] = at >= 0 and "trusted_hash" in config_text[at:at + 400].split("[", 2)[1]
+            if not _is_ours(group):
+                continue
+            ok = True
+            for at, handler in enumerate(group.get("hooks", [])):
+                if MARKER not in (handler.get("command") or ""):
+                    continue
+                keys = ["%s:%s:%d:%d" % (f, CODEX_EVENT_KEYS[event], index, at) for f in spellings]
+                state = next((states[k] for k in keys if k in states), {})
+                current = codex_hook_hash(event, group, handler)
+                ok = (ok and state.get("enabled") is not False and current is not None
+                      and state.get("trusted_hash") == current)
+            out[event] = out.get(event, True) and ok
     return out
 
 

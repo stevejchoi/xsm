@@ -1959,6 +1959,30 @@ class TaskContextTest(TempState):
         self.assertIn("XSM_HOME=%s " % self.tmp, envelope.reply_command(self._parsed("task")))
 
 
+def _trusted_config(home, events=("SessionStart", "UserPromptSubmit"), **fields):
+    """config.toml text trusting xsm's hooks in `home` the way Codex writes it:
+    one [hooks.state] table per hook, keyed by path, event, group and hook,
+    holding the hash of the hook as it is now. `fields` overrides a table's
+    values (trusted_hash, enabled) for every event."""
+    from xsm import install, paths
+    hooks_file = os.path.realpath(os.path.join(home, "hooks.json"))
+    data = paths.read_json(hooks_file, {}) or {}
+    body = ""
+    for event in events:
+        for index, group in enumerate(data["hooks"].get(event, [])):
+            if not install._is_ours(group):
+                continue
+            values = {"trusted_hash": install.codex_hook_hash(event, group, group["hooks"][0])}
+            values.update(fields)
+            body += '[hooks.state."%s:%s:%d:0"]\n' % (hooks_file, install.CODEX_EVENT_KEYS[event],
+                                                       index)
+            for key, value in values.items():
+                body += "%s = %s\n" % (key, "true" if value is True else "false"
+                                        if value is False else '"%s"' % value)
+            body += "\n"
+    return body
+
+
 class CodexVisibilityTest(TempState):
     """A Codex thread that is open but never prompted has not run its hook, so
     it is not in the registry. The sender must be told that, not "no such
@@ -1970,11 +1994,7 @@ class CodexVisibilityTest(TempState):
         os.makedirs(home, exist_ok=True)
         paths.write_json(os.path.join(home, "hooks.json"), {"hooks": {}}, mode=0o644)
         install.apply(home, "codex")
-        hooks_file = os.path.realpath(os.path.join(home, "hooks.json"))
-        body = ""
-        if trusted:
-            for key in ("session_start", "user_prompt_submit"):
-                body += '[hooks.state."%s:%s:0:0"]\ntrusted_hash = "sha256:x"\n\n' % (hooks_file, key)
+        body = _trusted_config(home) if trusted else ""
         open(os.path.join(home, "config.toml"), "w").write(body)
         config.add_home(home, "codex")
         return home
@@ -2017,9 +2037,7 @@ class AdoptionTest(TempState):
         os.makedirs(home, exist_ok=True)
         paths.write_json(os.path.join(home, "hooks.json"), {"hooks": {}}, mode=0o644)
         install.apply(home, "codex")
-        hooks_file = os.path.realpath(os.path.join(home, "hooks.json"))
-        body = "".join('[hooks.state."%s:%s:0:0"]\ntrusted_hash = "sha256:x"\n\n' % (hooks_file, k)
-                       for k in ("session_start", "user_prompt_submit")) if trusted else ""
+        body = _trusted_config(home) if trusted else ""
         open(os.path.join(home, "config.toml"), "w").write(body)
         config.add_home(home, "codex")
         return home
@@ -2050,6 +2068,229 @@ class AdoptionTest(TempState):
         registry.adopt_open_codex()
         again = registry.upsert("codex", home, "t-new", os.getpid(), self.tmp, permission_mode="auto")
         self.assertNotIn("adopted", again)
+
+
+class _EnvMixin:
+    """Set or clear the runtimes' identity variables for one test. The suite
+    itself may run inside a Claude or Codex shell, which sets them."""
+
+    def _env(self, **values):
+        for key, value in values.items():
+            self.addCleanup(lambda k=key, v=os.environ.get(key):
+                            os.environ.__setitem__(k, v) if v is not None else os.environ.pop(k, None))
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _walk(self, pid, comm=None):
+        """What the process walk finds: the nearest agent's pid (None is the
+        Codex sandbox, where `ps` is refused) and that process's name."""
+        from xsm import identity
+        identity.ancestor_pid = lambda names, max_hops=10: pid
+        identity.comm = lambda p: comm
+
+
+class OwnRuntimeIdentityTest(_EnvMixin, TempState):
+    """A shell that knows its own runtime id is identified by that id alone.
+    Before (adversarial review, 2026-09-28): a Codex thread with no record yet
+    fell through to the cwd rule and took the one live session in its folder,
+    and a Codex that inherited a Claude session id took that Claude session —
+    either way `xsm send` signed as someone else."""
+
+    def setUp(self):
+        super().setUp()
+        self._env(CLAUDE_CODE_MESSAGING_SOCKET=None, CLAUDE_CONFIG_DIR=os.path.join(self.tmp, "none"))
+        self.chome = os.path.join(self.tmp, "homes", "claude")
+        self.xhome = os.path.join(self.tmp, "homes", "codex")
+        os.makedirs(self.chome)
+        os.makedirs(self.xhome)
+
+    def test_an_unregistered_codex_thread_does_not_take_a_neighbour_by_cwd(self):
+        from xsm import registry
+        registry.upsert("codex", self.xhome, "t-neighbour", os.getpid(), self.tmp, name="neighbour")
+        self._env(CLAUDE_CODE_SESSION_ID=None, CODEX_THREAD_ID="t-mine")
+        self._walk(None)                                     # the Codex sandbox
+        self.assertEqual(registry._me(None, self.tmp), (None, "none:codex-thread-unregistered"))
+        # Where the walk runs, a pid match is no better: after /new the same
+        # TUI's older thread has this pid.
+        self._walk(os.getpid(), "codex")
+        self.assertIsNone(registry.me(cwd=self.tmp))
+        registry.upsert("codex", self.xhome, "t-mine", os.getpid(), self.tmp, name="mine")
+        self.assertEqual(registry.me(cwd=self.tmp)["session_id"], "t-mine")
+
+    def test_a_codex_carrying_only_a_registered_claude_id_does_not_take_it(self):
+        from xsm import registry
+        registry.upsert("claude", self.chome, "s-claude", 1111, self.tmp, name="builder")
+        self._env(CLAUDE_CODE_SESSION_ID="s-claude", CODEX_THREAD_ID="t-codex")
+        self._walk(None)                                     # the Codex sandbox
+        self.assertEqual(registry._me(None, self.tmp), (None, "none:codex-thread-unregistered"))
+        self._walk(2222, "codex")                            # nearest agent: an unregistered Codex
+        self.assertIsNone(registry.me(cwd=self.tmp))
+        self._walk(1111)                                     # a Claude run under that Codex
+        self.assertEqual(registry.me(cwd=self.tmp)["session_id"], "s-claude")
+
+    def test_a_claude_after_clear_is_still_found_by_its_process(self):
+        """/clear gives the same Claude process a new session id before its
+        hook records it; the pid still names the session."""
+        from xsm import registry
+        registry.upsert("claude", self.chome, "s-before-clear", 1111, self.tmp, name="builder")
+        self._env(CLAUDE_CODE_SESSION_ID="s-after-clear", CODEX_THREAD_ID=None)
+        self._walk(1111, "claude")
+        self.assertEqual(registry._me(None, self.tmp)[0]["session_id"], "s-before-clear")
+
+    def test_a_claude_with_an_id_never_falls_back_to_cwd(self):
+        from xsm import registry
+        registry.upsert("claude", self.chome, "s-neighbour", os.getpid(), self.tmp, name="n",
+                        socket=os.path.join(self.tmp, "none.sock"))
+        registry.upsert("codex", self.xhome, "t-neighbour", os.getpid(), self.tmp, name="m")
+        self._env(CLAUDE_CODE_SESSION_ID="s-mine", CODEX_THREAD_ID=None)
+        self._walk(None)
+        self.assertEqual(registry._me(None, self.tmp), (None, "none:unregistered-session"))
+
+    def test_a_shell_with_neither_id_still_uses_the_folder(self):
+        from xsm import registry
+        registry.upsert("codex", self.xhome, "t-only", os.getpid(), self.tmp, name="only")
+        self._env(CLAUDE_CODE_SESSION_ID=None, CODEX_THREAD_ID=None)
+        self._walk(None)
+        rec, how = registry._me(None, self.tmp)
+        self.assertEqual((rec["session_id"], how), ("t-only", "cwd"))
+
+    def test_a_codex_carrying_a_claude_id_is_told_about_its_thread(self):
+        """It was told to install xsm into the Claude home it inherited."""
+        from xsm import registry
+        self._env(CLAUDE_CODE_SESSION_ID="s-claude", CODEX_THREAD_ID="t-codex")
+        self._walk(None)
+        why = registry.unregistered_reason()
+        self.assertIn("Codex thread (t-codex)", why)
+        self.assertIn("next prompt", why)
+        self.assertNotIn("--claude-home", why)
+        self._walk(1111, "claude")                           # a Claude shell after all
+        self.assertIn("--claude-home", registry.unregistered_reason())
+
+
+class CodexHookTrustTest(TempState):
+    """Codex runs a hook only when it is not switched off and its trusted_hash
+    equals the hash of the hook as it is now (Codex 0.158). The mere text
+    "trusted_hash" near the key read as trusted before (review, 2026-09-28),
+    and the CLI adopted threads whose hooks never run."""
+
+    def _home(self):
+        from xsm import config, install, paths
+        home = os.path.join(self.tmp, "codex-trust")
+        os.makedirs(home, exist_ok=True)
+        paths.write_json(os.path.join(home, "hooks.json"), {"hooks": {}}, mode=0o644)
+        install.apply(home, "codex")
+        config.add_home(home, "codex")
+        return home
+
+    def _config(self, home, text):
+        with open(os.path.join(home, "config.toml"), "w") as fh:
+            fh.write(text)
+
+    def test_the_hash_is_codexs_own(self):
+        """The value Codex hashes (discovery.rs hook_hash, fingerprint.rs
+        version_for_toml): the normalized hook as JSON with sorted keys and no
+        spaces. Checked against real Codex homes when written (2026-09-28)."""
+        from xsm import install
+        group = {"hooks": [{"type": "command", "command": "python3 hook.py", "timeout": 10}]}
+        # The identity Codex serializes: sorted keys, no spaces, defaults filled.
+        text = ('{"event_name":"session_start","hooks":[{"async":false,'
+                '"command":"python3 hook.py","timeout":10,"type":"command"}]}')
+        import hashlib
+        self.assertEqual(install.codex_hook_hash("SessionStart", group, group["hooks"][0]),
+                         "sha256:" + hashlib.sha256(text.encode()).hexdigest())
+        # No timeout means Codex's 600 s; UserPromptSubmit drops any matcher.
+        bare = {"matcher": "x", "hooks": [{"type": "command", "command": "c"}]}
+        self.assertEqual(install.codex_hook_hash("UserPromptSubmit", bare, bare["hooks"][0]),
+                         install.codex_hook_hash("UserPromptSubmit", {"hooks": []},
+                                                 {"type": "command", "command": "c",
+                                                  "timeout": 600}))
+
+    def test_matching_hash_is_trusted(self):
+        from xsm import install
+        home = self._home()
+        self._config(home, _trusted_config(home))
+        self.assertEqual(install.codex_trust(home), {"SessionStart": True, "UserPromptSubmit": True})
+
+    def test_a_hook_changed_since_it_was_trusted_is_not(self):
+        from xsm import install, paths
+        home = self._home()
+        self._config(home, _trusted_config(home))
+        hooks = paths.read_json(os.path.join(home, "hooks.json"))
+        for group in hooks["hooks"]["SessionStart"]:
+            if install._is_ours(group):
+                group["hooks"][0]["command"] = "/elsewhere/python3 " + group["hooks"][0]["command"]
+        paths.write_json(os.path.join(home, "hooks.json"), hooks, mode=0o644)
+        self.assertEqual(install.codex_trust(home), {"SessionStart": False, "UserPromptSubmit": True})
+        self._config(home, _trusted_config(home, trusted_hash="sha256:" + "0" * 64))
+        self.assertEqual(install.codex_trust(home), {"SessionStart": False, "UserPromptSubmit": False})
+
+    def test_a_disabled_hook_is_not_trusted(self):
+        from xsm import install
+        home = self._home()
+        self._config(home, _trusted_config(home, enabled=False))
+        self.assertEqual(install.codex_trust(home), {"SessionStart": False, "UserPromptSubmit": False})
+        self._config(home, _trusted_config(home, enabled=True))
+        self.assertEqual(install.codex_trust(home), {"SessionStart": True, "UserPromptSubmit": True})
+
+    def test_the_parse_without_tomllib_agrees(self):
+        """The pinned interpreter may be 3.9, which has no tomllib."""
+        import builtins
+        from xsm import install
+        home = self._home()
+        real = builtins.__import__
+
+        def no_tomllib(name, *args, **kwargs):
+            if name == "tomllib":
+                raise ImportError(name)
+            return real(name, *args, **kwargs)
+
+        for text, want in ((_trusted_config(home), True),
+                           (_trusted_config(home, enabled=False), False),
+                           (_trusted_config(home, trusted_hash="sha256:x"), False),
+                           ("", False)):
+            self._config(home, "# user settings\nmodel = 'x'\n\n" + text)
+            with mock.patch.object(builtins, "__import__", no_tomllib):
+                self.assertEqual(install.codex_trust(home),
+                                 {"SessionStart": want, "UserPromptSubmit": want}, text)
+
+    def test_a_home_whose_hooks_codex_will_not_run_is_not_adopted(self):
+        from xsm import registry
+        home = self._home()
+        registry._open_codex_threads = lambda h: [("t-new", "fresh", self.tmp, None, 0, 0, os.getpid())]
+        for text in (_trusted_config(home, enabled=False),
+                     _trusted_config(home, trusted_hash="sha256:stale")):
+            self._config(home, text)
+            self.assertEqual(registry.adopt_open_codex(), [])
+        self._config(home, _trusted_config(home))
+        self.assertEqual([r["name"] for r in registry.adopt_open_codex()], ["fresh"])
+
+
+class WhoListAgreeTest(_EnvMixin, TempState):
+    """`list` adopts open Codex threads before it answers and `who` did not, so
+    `who`, `list`, `who` said "not registered", then marked a row `you`, then
+    "registered" (review, 2026-09-28)."""
+
+    def test_who_adopts_what_list_would(self):
+        from xsm import cli, config, install, paths, registry
+        home = os.path.join(self.tmp, "codex-who")
+        os.makedirs(home)
+        paths.write_json(os.path.join(home, "hooks.json"), {"hooks": {}}, mode=0o644)
+        install.apply(home, "codex")
+        config.add_home(home, "codex")
+        with open(os.path.join(home, "config.toml"), "w") as fh:
+            fh.write(_trusted_config(home))
+        registry._open_codex_threads = lambda h: [("t-open", "opened", self.tmp, None, 0, 0,
+                                                   os.getpid())]
+        self._env(CLAUDE_CODE_SESSION_ID=None, CLAUDE_CODE_MESSAGING_SOCKET=None,
+                  CODEX_THREAD_ID="t-open")
+        self._walk(None)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(["who"])
+        self.assertEqual(code, 0, err.getvalue())
+        self.assertIn("opened@", out.getvalue())
 
 
 if __name__ == "__main__":

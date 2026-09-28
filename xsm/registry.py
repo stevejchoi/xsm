@@ -514,57 +514,83 @@ def me(session_id: str | None = None, cwd: str | None = None):
     return rec
 
 
+def _runtime_here(rows: list | None = None) -> str | None:
+    """Which runtime's shell this is: "claude", "codex", or None for a shell
+    that carries neither runtime's id.
+
+    Each runtime sets its own id in the shells it runs, but leaves the other's
+    alone: a Codex started from a shell a Claude session made (a tmux server
+    first opened there, say) still carries that Claude's id, and took that
+    session for itself (2026-09-27). With both set, the nearer agent process
+    decides; where the walk cannot run, that is the Codex sandbox, which
+    refuses `ps` ("operation not permitted", measured 2026-09-22) — a Claude
+    shell is never sandboxed that way."""
+    own_session = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    thread = os.environ.get("CODEX_THREAD_ID")
+    if not (own_session and thread):
+        return "claude" if own_session else "codex" if thread else None
+    own = identity.ancestor_pid({"claude", "codex"})
+    if not own:
+        return "codex"
+    rec = next((r for r in (rows if rows is not None else records()) if r.get("pid") == own), None)
+    if rec and rec.get("runtime") in ("claude", "codex"):
+        return rec["runtime"]
+    return "claude" if identity.comm(own) == "claude" else "codex"
+
+
 def _me(session_id: str | None, cwd: str | None) -> tuple:
     """(record or None, which rule found it) — the rule is what a span of a
     refused command needs, since "cannot tell who is posting" has one cause
-    per rule that could have matched and did not."""
+    per rule that could have matched and did not.
+
+    The shell's own runtime is settled first, and only that runtime's id is
+    looked up. Falling through to the other rules from a shell that knows its
+    id handed it some other session's identity: a Codex thread not registered
+    yet took whichever live session shared its folder (via=cwd), and a Codex
+    carrying an inherited Claude id took that Claude session (adversarial
+    review, 2026-09-28) — and `xsm send` then signed as them."""
     rows = records()
-    own_session = os.environ.get("CLAUDE_CODE_SESSION_ID")
-    thread = os.environ.get("CODEX_THREAD_ID")
-    # Each runtime sets its own id in the shells it runs, but leaves the other's
-    # alone: a Codex started from a shell a Claude session made (a tmux server
-    # first opened there, say) still carries that Claude's id, and took that
-    # session for itself (2026-09-27). With both set, the nearer agent process
-    # decides; where the walk cannot run, that is the Codex sandbox.
-    if not session_id and own_session and thread:
-        claude = next((r for r in rows if r.get("session_id") == own_session), None)
-        codex = next((r for r in rows if r.get("runtime") == "codex"
-                      and r.get("session_id") == thread), None)
-        if claude and codex and claude is not codex:
-            own = identity.ancestor_pid({"claude", "codex"})
-            if own and claude.get("pid") == own:
-                return claude, "ancestor"
-            return codex, "ancestor" if own and codex.get("pid") == own else "codex_thread_id"
-    session_id = session_id or own_session
     if session_id:
-        for rec in rows:
-            if rec.get("session_id") == session_id:
-                return rec, "session_id"
-    # Codex puts its thread id in every shell it runs, and the thread id is
-    # what a Codex record is keyed by. It has to come before the process walk:
-    # the Codex sandbox refuses to run `ps` ("operation not permitted",
-    # measured 2026-09-22), so inside it the walk always fails, and two
-    # sandboxed sessions sharing a folder could not tell which one they were.
-    if thread:
+        # A hook names its session outright; that is not an inherited guess.
+        rec = next((r for r in rows if r.get("session_id") == session_id), None)
+        return (rec, "session_id") if rec else (None, "none:unregistered-session")
+    runtime = _runtime_here(rows)
+    if runtime == "codex":
+        # Codex puts its thread id in every shell it runs, and the thread id is
+        # what a Codex record is keyed by. Only that key counts: the process
+        # walk cannot run in the Codex sandbox, and where it can, a pid match
+        # may be an older thread of the same TUI after /new.
+        thread = os.environ.get("CODEX_THREAD_ID")
         for rec in rows:
             if rec.get("runtime") == "codex" and rec.get("session_id") == thread:
                 return rec, "codex_thread_id"
+        return None, "none:codex-thread-unregistered"
+    own_session = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if runtime == "claude":
+        for rec in rows:
+            if rec.get("session_id") == own_session:
+                return rec, "session_id"
+    # /clear and --resume give the same Claude process a new session id before
+    # its hook records it, so the rules that name the process still hold.
+    same_runtime = (lambda rec: rec.get("runtime") == "claude") if runtime else (lambda rec: True)
     sock = os.environ.get("CLAUDE_CODE_MESSAGING_SOCKET")
     if sock:
         pid = identity.pid_from_socket(sock)
         for rec in rows:
-            if rec.get("pid") == pid:
+            if rec.get("pid") == pid and same_runtime(rec):
                 return rec, "socket"
     # The CLI runs as a descendant of the session process, so walking up to the
     # agent gives an exact answer even when two sessions share a directory.
     own = identity.ancestor_pid({"claude", "codex"})
     if own:
         for rec in rows:
-            if rec.get("pid") == own:
+            if rec.get("pid") == own and same_runtime(rec):
                 return rec, "ancestor"
-    if own_session and session_id == own_session:
+    if runtime == "claude":
         adopted = adopt_self()
         return adopted, "adopted" if adopted else "none:unregistered-session"
+    # cwd only for a shell that carries neither id — never for one that knows
+    # its session id, where a cwd match would be some other session's identity.
     cwd = os.path.realpath(cwd or os.getcwd())
     live = [r for r in rows if r.get("cwd") == cwd and r.get("state") == "live"]
     if len(live) == 1:
@@ -576,15 +602,18 @@ def unregistered_reason() -> str:
     """What to tell a session that has no record. A Codex thread is registered
     by its hooks at its next prompt, so right after installing or trusting
     them the thread running the command is not known yet — "no hook record for
-    this cwd" read as a broken install (a tester's report, 2026-09-28)."""
-    why = self_consent(claude_home_here()) if os.environ.get("CLAUDE_CODE_SESSION_ID") else None
-    if why:
-        return "this session is not registered: %s" % why
-    thread = os.environ.get("CODEX_THREAD_ID")
-    if thread:
+    this cwd" read as a broken install (a tester's report, 2026-09-28). The
+    runtime is decided as `me` decides it: a Codex that inherited a Claude
+    session id was told to install xsm into that Claude's home."""
+    runtime = _runtime_here()
+    if runtime == "codex":
         return ("this Codex thread (%s) is not registered yet: xsm's hooks register a thread at "
                 "its next prompt, so if they were just installed or trusted, send any message in "
-                "this session and try again; if it persists, run `xsm doctor`" % thread)
+                "this session and try again; if it persists, run `xsm doctor`"
+                % os.environ.get("CODEX_THREAD_ID"))
+    why = self_consent(claude_home_here()) if runtime == "claude" else None
+    if why:
+        return "this session is not registered: %s" % why
     return ("this session is not registered: no hook record for it. If xsm was just installed, "
             "send any message in the session first; otherwise run `xsm doctor`")
 
