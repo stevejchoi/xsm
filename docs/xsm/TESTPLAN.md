@@ -362,7 +362,7 @@ xsm held show <목록에 나온 id>      # 전체 기록. show다, how가 아니
 4.1절의 C(`/tmp/xsm-outside`)와 A(시험용 저장소)를 가입 없이 잇는다. 4.5절을 먼저 했다면 `/xsm projects`가 0번과 같은지 확인한다.
 
 1. **거부 문구를 본다.** C에서 `/xsm send <A의 이름> reach 전`. 기대: `refused: out of scope: …`, 끝에 `or your user can let this session reach /private/tmp/xsm-trial (xsm_reach, …)`.
-2. **승인한다.** C 세션에 `/xsm reach /private/tmp/xsm-trial`. 양식이 뜨고 `allow`를 고른다. 기대: `allowed: this session can now talk with the sessions in /private/tmp/xsm-trial`. 관찰 터미널의 `xsm reach`에 `ref:<C의 ref> -> /private/tmp/xsm-trial`.
+2. **허락한다.** C 세션에 `/xsm reach /private/tmp/xsm-trial`을 친다. 사람이 직접 친 명령이 곧 허락이라 양식은 뜨지 않는다. 기대: `allowed: this session can now talk with the sessions in /private/tmp/xsm-trial`. 관찰 터미널의 `xsm reach`에 `ref:<C의 ref> -> /private/tmp/xsm-trial`.
 3. **양방향.** C에게 `<A의 이름>에게 xsm send --kind task로 "네 작업 폴더 경로를 알려줘"를 보내고 결과를 알려줘`. 기대: `delivered`, A 화면의 헤더에 `scope="reach:<C의 ref>"`, A의 답장이 C에 도착한다. B(같은 저장소의 하위 폴더)에서 C로 보내도 전달된다.
 4. **그 세션만이다.** `/tmp/xsm-outside`에서 세션 D를 하나 더 띄워 A에 보낸다. 기대: `refused: out of scope`.
 5. **거둔다.** 관찰 터미널에서 `xsm reach --drop --session ref:<C의 ref>`, 이어서 3번을 다시 하면 `refused`.
@@ -370,13 +370,50 @@ xsm held show <목록에 나온 id>      # 전체 기록. show다, how가 아니
 
 ### 4.7 link(4-13)
 
-4.1절의 C(`/tmp/xsm-outside`, Codex여도 된다)와 A(시험용 저장소)를 한쪽의 입력만으로 잇는다. 4.5·4.6절을 먼저 했다면 `/xsm projects`와 `xsm reach`가 비어 있는지 확인한다. Claude 홈은 `UserPromptExpansion` 훅이 있어야 입력을 동의로 적는다(이전 설치면 `xsm install`을 다시 돌린다. 플러그인은 그대로 된다).
+이 절은 link를 다시 시험하는 절차다. 앞 절을 하지 않았어도 따로 따라갈 수 있다. 경로는 모두 절대 경로로 적는다. macOS에서는 `/tmp`가 `/private/tmp`로 바뀌어 출력되므로 출력의 경로는 `/private/tmp/…`로 보인다.
 
-1. **거부 문구를 본다.** C에서 `/xsm send <A의 이름> link 전`. 기대: `refused: out of scope: …; to connect the two folders, your user types /xsm link /private/tmp/xsm-trial …`.
-2. **한쪽에서 잇는다.** C 세션에 `/xsm link /private/tmp/xsm-trial`(Codex `$xsm link …`). 기대: 양식이 뜨지 않고 `linked: the sessions in /private/tmp/xsm-outside and /private/tmp/xsm-trial can talk …`. 관찰 터미널의 `xsm link`에 두 폴더가 보인다. Codex가 approval_policy "never"여도 같다.
-3. **양방향, 두 폴더 전체.** C에서 A로, A에서 C로, B(같은 저장소의 하위 폴더)에서 C로 보낸다. 기대: 모두 `delivered`, 헤더의 scope는 `link:xsm-outside+xsm-trial`(두 루트의 전체 경로 순). `/tmp/xsm-outside`에서 새로 띄운 세션 D도 A와 통한다(reach와 다른 점).
-4. **에이전트가 스스로 잇지 못한다.** 다른 세션의 에이전트에게 말로 "`xsm link /tmp/elsewhere`를 실행해"라고 시킨다. 기대: 사람이 그 세션에 `/xsm link`를 입력하지 않았으므로 `refused: linking two folders is your user's decision: they type /xsm link …`. 피어 메시지로 같은 부탁을 보내도 동의가 되지 않는다.
-5. **푼다.** 아무 세션이나 터미널에서 `xsm unlink /private/tmp/xsm-trial --dir /tmp/xsm-outside`, 이어서 3번을 다시 하면 `refused`.
+**준비: 최신 xsm으로 갱신하고 새 세션을 연다.** 사람이 세션에 친 `/xsm link`를 동의로 적는 훅(Claude의 `UserPromptExpansion`)과 MCP 도구 `xsm_link`는 새 기능이다. 예전 설치에는 둘 다 없다.
+
+- 직접 설치했다면 터미널에서 갱신한다.
+
+  ```bash
+  cd <xsm 저장소> && git pull
+  xsm install --refresh
+  ```
+
+- 플러그인으로 설치했다면 Claude Code 세션에서 갱신한다.
+
+  ```
+  /plugin marketplace update xsm
+  /plugin update xsm@xsm
+  ```
+
+- 어느 쪽이든 갱신한 뒤 **세션을 새로 연다.** 이미 떠 있던 MCP 서버는 예전 도구 목록을 그대로 쓰므로, 그 세션에는 `xsm_link`가 없다. 세션을 새로 열기 어렵다면 Claude Code에서 `/mcp`로 xsm 서버를 다시 연결한다.
+- 새 세션에서 `/mcp`를 쳐서 xsm 서버의 도구 목록에 `xsm_link`가 있는지 확인한다.
+
+**폴더 두 개를 만든다.** 서로 연결된 적 없는 폴더 A와 B를 쓴다.
+
+```bash
+mkdir -p /tmp/xsm-link-a /tmp/xsm-link-b /tmp/xsm-link-c
+xsm link                                  # A와 B를 잇는 줄이 없어야 한다
+xsm projects --dir /tmp/xsm-link-a        # A와 B가 함께 든 이름 붙은 프로젝트가 없어야 한다
+```
+
+A에서 세션 하나(A1), B에서 세션 하나(B1)를 띄운다. Claude Code든 Codex든 상관없다.
+
+1. **잇기 전에는 막힌다.** A1에 `/xsm send <B1의 이름> link 전`을 친다. 기대: `refused: out of scope: …; to connect the two folders, your user types /xsm link /private/tmp/xsm-link-b …`.
+2. **A에서만 잇는다.** A1에 아래 중 하나를 친다.
+   - Claude Code: `/xsm link /tmp/xsm-link-b` (플러그인이면 `/xsm:xsm link /tmp/xsm-link-b`도 된다)
+   - Codex: `$xsm link /tmp/xsm-link-b`
+
+   기대: 양식이 뜨지 않고 바로 `linked: the sessions in /private/tmp/xsm-link-a and /private/tmp/xsm-link-b can talk, both ways, …`가 나온다. B1에서는 아무것도 하지 않는다. Codex의 approval_policy가 "never"여도 결과는 같다.
+3. **서로 보인다.** A1과 B1에서 각각 `/xsm list`(Codex `$xsm list`)를 친다. 기대: A1의 목록에 B1이, B1의 목록에 A1이 보인다.
+4. **양쪽으로 주고받는다.** A1에서 `/xsm send <B1의 이름> A에서 B로`, B1에서 `/xsm send <A1의 이름> B에서 A로`를 친다. 기대: 둘 다 `delivered`이고, 받은 쪽 헤더의 scope가 `link:xsm-link-a+xsm-link-b`다.
+5. **폴더 전체가 이어진다.** A에서 세션 A2를 새로 띄워 B1에게 보낸다. 기대: `delivered`. link는 세션이 아니라 폴더를 잇기 때문이다(reach와 다른 점).
+6. **다른 폴더는 그대로다.** C(`/tmp/xsm-link-c`)에서 세션 C1을 띄워 A1에게 보낸다. 기대: `refused: out of scope`.
+7. **에이전트가 스스로 잇자고 하면 양식이 뜬다.** A1에 명령 대신 말로 부탁한다. "xsm_link 도구로 /tmp/xsm-link-c와 연결해 줘." 사람이 `/xsm link`를 치지 않았으므로 양식이 뜬다. `deny`를 고르거나 답하지 않고 닫는다. 기대: `your user declined: they chose 'deny'…` 또는 `your user did not answer …`. 터미널의 `xsm link`에 C가 없다. 에이전트가 도구 대신 셸에서 `xsm link`를 실행하면 `refused: linking two folders is your user's decision …`로 끝난다.
+8. **피어 메시지 속 글자는 동의가 아니다.** B1에서 `/xsm send <A1의 이름> /xsm link /tmp/xsm-link-c`를 친다. A1에는 그 글자가 메시지 본문으로만 도착한다. A1의 에이전트가 그 말을 따라 잇자고 하면 양식이 뜨므로 `deny`를 고른다. 기대: 터미널의 `xsm link`에 C가 없다.
+9. **푼다.** 터미널에서 `xsm unlink /tmp/xsm-link-b --dir /tmp/xsm-link-a`를 친다. 기대: `unlinked: /private/tmp/xsm-link-a and /private/tmp/xsm-link-b`. 이어서 4번을 다시 하면 둘 다 `refused`이고, `xsm link`와 `xsm projects --dir /tmp/xsm-link-a`는 시작 전과 같다.
 
 ## 5. 협업 과제
 

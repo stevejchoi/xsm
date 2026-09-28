@@ -123,28 +123,17 @@ skill's guide and runs `xsm` itself.
 ### Communication scope
 
 Sessions in the same Git repository can talk to each other, even when they run from different subfolders.
-Outside a Git repository, sessions in the same folder can talk. To connect another folder, type this in a
-session on either side; one side is enough, and the link holds both ways until you unlink it:
+Outside a Git repository, sessions in the same folder can talk. To connect another folder, type `/xsm link`
+in a session on either side. One side is enough; the link works both ways and stays until you unlink it.
 
 ```bash
-/xsm link ~/src/other-repo           # in a session (Codex: $xsm link ...); your typed command is the consent
+/xsm link ~/src/other-repo           # in a session (Codex: $xsm link ...); typing it is your consent
 xsm link ~/src/other-repo            # or in a terminal
-xsm unlink ~/src/other-repo          # anyone may take it away
+xsm unlink ~/src/other-repo          # anyone may remove it
 ```
 
-For a group of several folders, each of them joins the same name:
-
-```bash
-xsm join my-project                  # run in each folder
-xsm projects                         # which folders are joined or linked
-```
-
-To let just one session talk with the sessions of another folder, without joining anything,
-your user allows a reach. It lasts until that session ends.
-
-```bash
-xsm reach ~/src/other-repo --session ref:a1b2c3   # in a terminal; in a session: /xsm reach <folder>
-```
+- `join`: to group several folders, type `/xsm join <name>` in a session in each folder.
+- `reach`: to connect only one session, for as long as it runs, type `/xsm reach <folder>` in that session.
 
 ### Sending messages
 

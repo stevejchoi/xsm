@@ -47,11 +47,12 @@ it, nothing after it, and run nothing else.
 MESSAGE is everything after it, passed as a single shell-quoted argument. Do
 not rewrite the message. Reply with the command's output, copied exactly,
 inside one code block. If it fails with `sandbox-blocked`, call the MCP tool
-`xsm_send` with the same target and text instead, and reply with its result the
-same way.
+`xsm_send` instead (same target and text) and reply with its result the same way.
 
 **`link <folder>`** — call the MCP tool `xsm_link` with `dir` set to the folder
-(both folders, both ways, until unlinked; what your user typed is the consent).
+(both ways, until unlinked; what your user typed is the consent). If there is no
+`xsm_link` tool, run `xsm link <folder>` in the shell (it uses the same consent);
+if that is refused, tell your user to start a new session and type it there.
 
 **`join <project>`** / **`leave <project>`** — call `xsm_join` with `project`
 set to the word after it (and `leave` true for `leave`).
@@ -71,9 +72,8 @@ usage: /xsm list | who | log | projects | doctor | send <target> <message> | lin
 
 When you loaded this skill yourself, or your user asked in words, read
 [references/guide.md](references/guide.md) before you choose a command or write
-an address. It covers finding sessions, projects, sending and replying, the
-channel, shared documents, other machines, workers, and what to do when
-something looks wrong.
+an address. It covers sessions, projects, sending and replying, the channel,
+shared documents, other machines, workers, and what to do when something breaks.
 
 One refusal is common enough to know before you open it. From a sandboxed
 shell (a background worker, a Codex workspace-write session) `xsm send` to a

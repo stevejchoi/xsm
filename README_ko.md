@@ -117,26 +117,16 @@ $xsm list                            # Codex
 
 ### 통신 범위
 
-같은 Git 저장소 안의 세션끼리는 하위 폴더가 달라도 통합니다. Git 저장소 밖에서는 같은 폴더의 세션끼리 통합니다. 다른 폴더와 연결하려면 어느 한쪽 세션에서 아래처럼 입력합니다. 한쪽이면 충분하고, 연결은 양방향이며 풀기 전까지 유지됩니다.
+같은 Git 저장소 안의 세션끼리는 하위 폴더가 달라도 통합니다. Git 저장소 밖에서는 같은 폴더의 세션끼리 통합니다. 다른 폴더와 연결하려면 어느 한쪽 세션에서 `/xsm link`를 입력합니다. 한쪽에서만 입력하면 되고, 연결은 양방향이며 풀 때까지 남습니다.
 
 ```bash
-/xsm link ~/src/other-repo           # 세션 안에서 (Codex: $xsm link ...). 직접 입력한 명령이 곧 동의입니다
-xsm link ~/src/other-repo            # 또는 터미널에서
-xsm unlink ~/src/other-repo          # 해제는 누구나 할 수 있습니다
+/xsm link ~/src/other-repo           # 세션에서 (Codex: $xsm link ...). 사람이 직접 입력했으니 따로 묻지 않습니다
+xsm link ~/src/other-repo            # 터미널에서 쳐도 됩니다
+xsm unlink ~/src/other-repo          # 연결은 누구나 풀 수 있습니다
 ```
 
-여러 폴더를 한 묶음으로 두려면 각 폴더가 같은 이름으로 참여합니다.
-
-```bash
-xsm join my-project                  # 각 폴더에서 실행
-xsm projects                         # 어떤 폴더들이 참여·연결되어 있는지
-```
-
-가입 없이 한 세션만 다른 폴더의 세션들과 통하게 하려면 사용자가 reach를 허락합니다. 그 세션이 끝나면 사라집니다.
-
-```bash
-xsm reach ~/src/other-repo --session ref:a1b2c3   # 터미널에서. 세션 안에서는 /xsm reach <폴더>
-```
+- `join`: 여러 폴더를 한 묶음으로 두려면 각 폴더의 세션에서 `/xsm join <이름>`을 입력합니다.
+- `reach`: 세션 하나만 그 세션이 끝날 때까지 연결하려면 그 세션에서 `/xsm reach <폴더>`를 입력합니다.
 
 ### 메시지 송신
 
