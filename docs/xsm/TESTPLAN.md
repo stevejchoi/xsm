@@ -249,6 +249,7 @@ cd $XSM_REPO && xsm list --dir /tmp/xsm-trial
 | 4-9 | 검문 | 4.4절 | B에서 차단, `xsm held list`에 본문 보관 |
 | 4-10 | 고장 대비 | 관찰 터미널에서 `xsm selftest` | 피어 메시지 차단, 사람 입력 통과 |
 | 4-11 | 프로젝트 가입 | 4.5절 | 양쪽이 가입한 뒤에만 `delivered`, 같은 저장소는 계속 기본 프로젝트, 탈퇴하면 다시 `refused` |
+| 4-12 | reach | 4.6절 | 승인한 세션만 그 폴더와 양방향 `delivered`, 같은 폴더의 다른 세션은 계속 `refused`, 거두면 다시 `refused` |
 
 ### 4.1 범위 밖 세션(4-6)
 
@@ -354,6 +355,17 @@ xsm held show <목록에 나온 id>      # 전체 기록. show다, how가 아니
 가입 기록은 `~/.xsm/config.json`의 `scopes`에 `{"root": …}`로 남는다. 탈퇴할 때까지 유지되고 시간이 지나도 만료되지 않는다. 손으로 쓴 범위와 이름이 같으면 가입이 거부된다. 이름 붙인 프로젝트 이름에는 `:`를 쓸 수 없어서 기본 프로젝트 이름과 겹치지 않는다.
 
 실측(2026-09-21): 저장소 `app`의 루트(A 역할)와 하위 폴더(B 역할), 저장소 밖 `lib`(C 역할) 세 세션으로 0~6번을 돌렸다. 가입 전과 한쪽 가입 뒤에는 `refused`였다. 양쪽이 가입한 뒤 app→lib와 하위 폴더→lib는 `demo`로, app→하위 폴더는 가입 전후 모두 `repo:app`으로 `delivered`였다. lib가 탈퇴한 뒤에는 다시 `refused`였다.
+
+### 4.6 reach(4-12)
+
+4.1절의 C(`/tmp/xsm-outside`)와 A(시험용 저장소)를 가입 없이 잇는다. 4.5절을 먼저 했다면 `/xsm projects`가 0번과 같은지 확인한다.
+
+1. **거부 문구를 본다.** C에서 `/xsm send <A의 이름> reach 전`. 기대: `refused: out of scope: …`, 끝에 `or your user can let this session reach /private/tmp/xsm-trial (xsm_reach, …)`.
+2. **승인한다.** C 세션에 `/xsm reach /private/tmp/xsm-trial`. 양식이 뜨고 `allow`를 고른다. 기대: `allowed: this session can now talk with the sessions in /private/tmp/xsm-trial`. 관찰 터미널의 `xsm reach`에 `ref:<C의 ref> -> /private/tmp/xsm-trial`.
+3. **양방향.** C에게 `<A의 이름>에게 xsm send --kind task로 "네 작업 폴더 경로를 알려줘"를 보내고 결과를 알려줘`. 기대: `delivered`, A 화면의 헤더에 `scope="reach:<C의 ref>"`, A의 답장이 C에 도착한다. B(같은 저장소의 하위 폴더)에서 C로 보내도 전달된다.
+4. **그 세션만이다.** `/tmp/xsm-outside`에서 세션 D를 하나 더 띄워 A에 보낸다. 기대: `refused: out of scope`.
+5. **거둔다.** 관찰 터미널에서 `xsm reach --drop --session ref:<C의 ref>`, 이어서 3번을 다시 하면 `refused`.
+6. **세션이 끝나면 사라진다.** 2번을 다시 하고 C를 종료한 뒤 `xsm prune`. 기대: `xsm reach`가 `no reaches`.
 
 ## 5. 협업 과제
 
@@ -535,6 +547,7 @@ Codex에는 Claude처럼 "동료의 요청으로 다뤄라"는 자체 안내가 
 | 전달 | 4-3, 4-4가 `delivered`로 닫힌다 |
 | 거부 | 4-6, 4-7, 4-8이 발신 단계에서 거부된다 |
 | 가입 | 4-11에서 양쪽 가입 뒤에만 전달되고, 한쪽 가입과 탈퇴 뒤에는 거부되며, 같은 저장소 세션끼리의 scope는 가입 전후로 바뀌지 않는다 |
+| reach | 4-12에서 승인한 세션과 그 폴더 사이만 양방향으로 전달되고, 다른 세션과 거둔 뒤에는 거부된다 |
 | 검문 | 4-9가 차단되고 본문이 보관된다 |
 | 고장 | 4-10이 통과한다 |
 | 협업 | 5-1과 5-2가 사람 개입 없이 이어지고 5-4가 동작한다 |
