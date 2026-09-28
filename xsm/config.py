@@ -134,14 +134,39 @@ def _reach_link(a: dict, b: dict, cfg: dict) -> str | None:
     folder, both ways, for as long as it runs (`xsm reach`). The folder's
     other sessions and the rest of the reaching session's project follow the
     usual rules; the id names the reaching session, so both sides compute it.
-    Whether that session still runs is not asked here: a stopped session can
-    neither send nor receive, and housekeeping drops its reaches."""
+    The holder is matched on its full identity and run, not its ref
+    (reach_holds): a ref is 24 bits and collided within ~11k synthetic tries,
+    and a resumed session id comes back under a new pid (2026-09-28). Whether
+    the holder still runs is not asked here: send refuses a target that is
+    ended or stale, receive refuses such a sender, and SessionEnd plus
+    housekeeping drop its reaches."""
     for r in cfg.get("reaches") or []:
         for mine, other in ((a, b), (b, a)):
-            if mine.get("ref") and mine.get("ref") == r.get("ref") and \
-                    member_matches({"root": r.get("root")}, other):
+            if reach_holds(r, mine) and member_matches({"root": r.get("root")}, other):
                 return "reach:%s" % r["ref"]
     return None
+
+
+def reach_holds(r: dict, session: dict) -> bool:
+    """Whether `session` is the very run that reach `r` was granted to: same
+    runtime, home and session id, and the same pid and process start time.
+    `claude --resume` reuses the session id under a new pid, and the hourly
+    prune used to be all that stood between a resume and a revived reach
+    (2026-09-28). A reach stored before this binding has no session id and
+    holds for nobody; granting it again stores the binding."""
+    if not (r.get("session_id") and session.get("session_id")):
+        return False
+    if (session.get("runtime"), str(session.get("session_id"))) != \
+            (r.get("runtime"), str(r.get("session_id"))):
+        return False
+    if os.path.realpath(session.get("home") or "") != os.path.realpath(r.get("home") or ""):
+        return False
+    if "pid" not in session or "lstart" not in session:
+        # A probe that is not a registry record (a listing row, a test dict):
+        # the pointer on disk says which run this session id is on now.
+        from . import registry          # lazy: registry imports this module
+        session = registry.by_session(r["runtime"], str(r["session_id"])) or {}
+    return session.get("pid") == r.get("pid") and session.get("lstart") == r.get("lstart")
 
 
 def _reach_hint(a: dict, b: dict) -> str:
@@ -158,7 +183,12 @@ def _worker_link(a: dict, b: dict) -> str | None:
     (an outside_scope grant, or the spawn ran at their terminal), yet the task
     and every reply used to be refused by this very check, so the worker came
     up and never heard a word (2026-09-28). The link covers that pair only:
-    the worker and the other sessions of its folder follow the usual rules."""
+    the worker and the other sessions of its folder follow the usual rules.
+    Open policy question (2026-09-28): the link is matched on refs alone, so
+    it still holds when the worker's process is gone and someone resumes the
+    same child session id by hand. Whether a worker/parent relation should
+    span a resume of the same conversation, as a reach deliberately does not,
+    is undecided; the behaviour is left as it is until it is."""
     refs = {a.get("ref"), b.get("ref")}
     if None in refs or len(refs) != 2:
         return None
@@ -292,37 +322,87 @@ def leave(name: str, cwd: str) -> bool:
 #
 # Joining a project opens two folders to each other for good. A reach is
 # narrower: one running session and the sessions of one folder, for as long as
-# that session runs. It widens who may talk, so only a person grants it; it
+# that run of the session lasts: a resume of the same session id does not bring
+# it back (2026-09-28). It widens who may talk, so only a person grants it; it
 # narrows when dropped, so anyone may drop it (2026-09-28).
 
 def reaches() -> list:
     return list(load().get("reaches") or [])
 
 
-def add_reach(ref: str, folder: str, by: str) -> tuple:
+def add_reach(ref: str, folder: str, by: str, session: dict | None = None) -> tuple:
     """Let session `ref` talk with the sessions of `folder`'s project.
-    Returns (entry, added)."""
+    Returns (entry, added).
+
+    The entry is bound to the session's identity and current run (see
+    reach_holds), taken from `session` when the caller has its record, else
+    from the one running record with that ref. Two running sessions sharing a
+    ref cannot be told apart here, so that is refused rather than guessed."""
     root = project_root(os.path.expanduser(folder))
     if not os.path.isdir(root):
         raise ValueError("%s is not a folder" % folder)
+    if session is None or not session.get("session_id") or "lstart" not in session:
+        from . import registry          # lazy: registry imports this module
+        running = [rec for rec in registry.records() if rec.get("ref") == ref
+                   and rec.get("state") in ("live", "unknown")]
+        if session is not None and session.get("session_id"):
+            running = [rec for rec in running
+                       if str(rec.get("session_id")) == str(session["session_id"])]
+        if not running:
+            raise ValueError("no running session has ref %s" % ref)
+        if len(running) > 1:
+            raise ValueError("%d running sessions share ref %s; name one with claude:<session id> "
+                             "or codex:<session id>" % (len(running), ref))
+        session = running[0]
+    elif session.get("state") in ("ended", "stale"):
+        raise ValueError("ref %s is not running (%s)" % (ref, session["state"]))
+    holder ={k: session.get(k) for k in ("runtime", "session_id", "pid", "lstart")}
+    holder["session_id"] = str(holder["session_id"])
+    holder["home"] = os.path.realpath(session.get("home") or "")
     raw = _raw()
     rows = raw.setdefault("reaches", [])
-    for r in rows:
+    for r in list(rows):
         if r.get("ref") == ref and os.path.realpath(r.get("root", "")) == root:
-            return r, False
+            if all(r.get(k) == v for k, v in holder.items()):
+                return r, False
+            if not r.get("session_id") or (r.get("runtime"), r.get("session_id")) == \
+                    (holder["runtime"], holder["session_id"]):
+                rows.remove(r)          # an unbound or earlier-run row: replaced below
     entry = {"ref": ref, "root": root, "t": time.time(), "by": by}
+    entry.update(holder)
     rows.append(entry)
     _save(raw)
     return entry, True
 
 
-def drop_reach(ref: str, folder: str | None = None) -> int:
-    """Remove session `ref`'s reach to `folder`, or all of its reaches."""
+def drop_reach(ref: str, folder: str | None = None, session: dict | None = None) -> int:
+    """Remove session `ref`'s reach to `folder`, or all of its reaches. With
+    `session`, only the reaches of that session id (in that runtime and home),
+    so a session sharing the ref keeps its own."""
     root = project_root(os.path.expanduser(folder)) if folder else None
+
+    def mine(r):
+        if r.get("ref") != ref:
+            return False
+        if root and os.path.realpath(r.get("root", "")) != root:
+            return False
+        if session is not None:
+            return (r.get("runtime"), str(r.get("session_id"))) == \
+                (session.get("runtime"), str(session.get("session_id"))) and \
+                os.path.realpath(r.get("home") or "") == os.path.realpath(session.get("home") or "")
+        return True
+    return _drop_reach_rows(mine)
+
+
+def drop_reaches(entries: list) -> int:
+    """Remove exactly these reach entries (as reaches() returned them)."""
+    return _drop_reach_rows(lambda r: r in entries)
+
+
+def _drop_reach_rows(match) -> int:
     raw = _raw()
     rows = raw.get("reaches") or []
-    kept = [r for r in rows if r.get("ref") != ref or
-            (root and os.path.realpath(r.get("root", "")) != root)]
+    kept = [r for r in rows if not match(r)]
     if len(kept) == len(rows):
         return 0
     raw["reaches"] = kept

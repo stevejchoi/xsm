@@ -189,6 +189,10 @@ def _handle(data: dict) -> dict | None:
         if data.get("session_id"):
             ended = registry.mark_ended(runtime, data["session_id"], data.get("reason"))
             workers.reap_detached(ended)    # its workers have nobody to report to now
+            if ended and ended.get("ref"):
+                # A reach lasts until its session ends. Waiting for the hourly
+                # prune left it standing for a resume under a new pid (2026-09-28).
+                config.drop_reach(ended["ref"], session=ended)
         return None
     me = register(data, runtime)
     if me:
@@ -304,9 +308,9 @@ def check(parsed, me: dict | None, cfg: dict | None = None) -> tuple:
         elif me.get("ref") in config.blocked():
             decision, reason = "block", "a blocked session is on this message"
     else:
-        sender = _sender_record(parsed)
+        sender, why_not = _sender_record(parsed)
         if sender is None:
-            decision, reason = "block", "sender %r is not registered" % parsed.header.get("from")
+            decision, reason = "block", why_not
         elif sender.get("state") not in ("live", "unknown"):
             # A stopped session's pointer stays for days; its name must not
             # carry a message now (S8-e, ADR-0009).
@@ -370,14 +374,34 @@ def take_inbox(me: dict) -> list:
     return out
 
 
-def _sender_record(parsed) -> dict | None:
-    """The sender as the registry knows it, matched on the ref in the header —
-    names change while a session runs, refs do not (S7)."""
+def _sender_record(parsed) -> tuple:
+    """(record, reason): the sender as the registry knows it, matched on the
+    ref in the header — names change while a session runs, refs do not (S7).
+
+    A ref is 24 bits and two records can share one (collisions within ~11k
+    synthetic tries, 2026-09-28). Taking the first match would check scope and
+    liveness against the wrong session. So when several records carry the
+    ref, the envelope's from-session, then the header's from name, must pick
+    exactly one; otherwise there is no sender and the message is refused.
+    Both are the sender's own words, like the ref itself: they narrow the
+    choice, they never widen it past the ref."""
     ref = parsed.header.get("ref")
-    for rec in registry.records():
-        if ref and rec.get("ref") == ref:
-            return rec
-    return None
+    if not ref:
+        return None, "sender %r is not registered" % parsed.header.get("from")
+    matches = [rec for rec in registry.records() if rec.get("ref") == ref]
+    if not matches:
+        return None, "sender %r is not registered" % parsed.header.get("from")
+    if len(matches) == 1:
+        return matches[0], ""
+    sid = parsed.attrs.get("from-session")
+    by_id = [rec for rec in matches if sid and str(rec.get("session_id")) == sid]
+    if len(by_id) == 1:
+        return by_id[0], ""
+    name = parsed.header.get("from")
+    by_name = [rec for rec in matches if name and "%s@%s" % (rec.get("name"), rec.get("alias")) == name]
+    if len(by_name) == 1:
+        return by_name[0], ""
+    return None, "sender %r is ambiguous: %d sessions share ref %s" % (name, len(matches), ref)
 
 
 def main(argv=None) -> int:

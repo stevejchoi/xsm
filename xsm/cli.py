@@ -365,7 +365,7 @@ def cmd_reach(args) -> int:
         print("refused: which session? name it with --session ref:xxxxxx", file=sys.stderr)
         return USAGE
     if args.drop:
-        n = config.drop_reach(me["ref"], args.folder)
+        n = config.drop_reach(me["ref"], args.folder, session=me)
         print("dropped %d reach(es) of ref:%s" % (n, me["ref"]))
         return OK
     why = _person_or_refuse("letting a session reach another folder", "xsm_reach")
@@ -373,7 +373,8 @@ def cmd_reach(args) -> int:
         print("refused: %s" % why, file=sys.stderr)
         return REFUSED
     try:
-        entry, added = config.add_reach(me["ref"], args.folder, os.environ.get("USER") or "person")
+        entry, added = config.add_reach(me["ref"], args.folder, os.environ.get("USER") or "person",
+                                        session=me)
     except ValueError as exc:
         print("refused: %s" % exc, file=sys.stderr)
         return USAGE
