@@ -128,16 +128,26 @@ TOOLS = [
 ]
 
 
-def person_answer(reply, allowed=None) -> tuple:
+# The clientInfo.name Codex sends in initialize (codex-rs/codex-mcp/src/rmcp_client.rs,
+# 0.158). Only Codex is known to decline forms without showing them.
+CODEX_CLIENT = "codex-mcp-client"
+ACTIONS = {"accept": "accepted", "decline": "declined", "cancel": "dismissed"}
+
+
+def person_answer(reply, allowed=None, client=None) -> tuple:
     """The answer a person chose in a form, or (None, why not).
 
     Every form tool acts only on this. It takes what the client reports: an
     accepted form whose `answer` is a non-empty string (one of `allowed`, when
     the form offers choices), unless `_meta.approvals_reviewer` says someone
-    other than the user answered it. Anything malformed is no answer, never an
-    exception. A client that answers forms by itself — a Claude Code Elicitation
-    hook the user configured, say — reports it as the user's, and xsm cannot
-    tell; that is outside what it can detect.
+    other than the user answered it. Anything malformed — an `action` that is
+    not one of the three, a `_meta` or `content` that is not an object — is no
+    answer, never an exception: an unhashable `action` once raised past serve()
+    and took the server down, and a list `_meta` was read as no meta at all, so
+    all six tools acted (second review, 2026-09-28). A client that answers
+    forms by itself — a Claude Code Elicitation hook the user configured, say —
+    reports it as the user's, and xsm cannot tell; that is outside what it can
+    detect.
 
     Codex (0.158): its auto-review does not look at xsm's forms (it reviews only
     elicitations whose `_meta` asks for an approval), but approval_policy
@@ -145,7 +155,9 @@ def person_answer(reply, allowed=None) -> tuple:
     without showing them, unless full-access form input is on for the thread.
     That bare decline is also what a person pressing Decline sends, so it is
     reported as either. A bare "your user did not allow it" read as a refusal
-    nobody had given (a tester's report, 2026-09-28)."""
+    nobody had given (a tester's report, 2026-09-28). `client` is the
+    clientInfo.name from initialize, so the wording names Codex only when it
+    is Codex."""
     if not isinstance(reply, dict):
         return None, "the client sent no reply"
     error = reply.get("error")
@@ -156,24 +168,30 @@ def person_answer(reply, allowed=None) -> tuple:
     if not isinstance(result, dict):
         return None, "the client sent no result"
     action = result.get("action")
+    if not isinstance(action, str) or action not in ACTIONS:
+        return None, "the client answered %r, which is not a form answer" % (action,)
     meta = result.get("_meta")
-    reviewer = meta.get("approvals_reviewer") if isinstance(meta, dict) else None
+    if meta is not None and not isinstance(meta, dict):
+        return None, "the client sent a malformed _meta, so who answered is unknown"
+    reviewer = (meta or {}).get("approvals_reviewer")
     if reviewer not in (None, "user"):
         note = next((v for k, v in meta.items() if k != "approvals_reviewer" and isinstance(v, str)),
                     "")
-        done = {"accept": "accepted", "decline": "declined", "cancel": "dismissed"}
         return None, ("%s by the client's automatic reviewer, not by your user%s; xsm counts only "
-                      "a person's answer" % (done.get(action, "answered"),
-                                             (": " + note) if note else ""))
+                      "a person's answer" % (ACTIONS[action], (": " + note) if note else ""))
     if action == "decline":
-        return None, ("declined — by your user, or by Codex without showing the form "
-                      "(approval_policy \"never\")")
+        if client == CODEX_CLIENT:
+            return None, ("declined — by your user, or by Codex without showing the form "
+                          "(approval_policy \"never\")")
+        if client:
+            return None, "declined — by your user, or by the client without showing the form"
+        return None, ("declined — by your user, or by the client without showing the form "
+                      "(Codex does this under approval_policy \"never\")")
     if action == "cancel":
         return None, "the form was dismissed"
-    if action != "accept":
-        return None, "the client answered %r" % (action,)
     content = result.get("content")
     answer = content.get("answer") if isinstance(content, dict) else None
+    # Stripped, and compared with choices that were offered stripped (decide).
     answer = answer.strip() if isinstance(answer, str) else ""
     if not answer:
         return None, "the form came back with no choice in it, so nobody picked one"
@@ -182,15 +200,16 @@ def person_answer(reply, allowed=None) -> tuple:
     return answer, "they chose %r" % answer
 
 
-def who_answered(reply) -> str:
+def who_answered(reply, client=None) -> str:
     """Who answered a form, in words for the tool's result."""
-    return person_answer(reply)[1]
+    return person_answer(reply, client=client)[1]
 
 
 class Server:
     def __init__(self, inp=sys.stdin, out=sys.stdout):
         self.inp, self.out = inp, out
         self.client_caps = {}
+        self.client_name = None         # clientInfo.name from initialize
         self.next_id = 0
 
     # -- transport ----------------------------------------------------------------
@@ -216,6 +235,9 @@ class Server:
                 return msg
             if msg.get("method") == "ping" and "id" in msg:
                 self.send({"id": msg["id"], "result": {}})
+
+    def answer(self, reply, allowed) -> tuple:
+        return person_answer(reply, allowed, self.client_name)
 
     # -- the session ---------------------------------------------------------------
     def session(self) -> dict | None:
@@ -285,7 +307,14 @@ class Server:
                                        "support); a person can post the decision with "
                                        "`xsm post --tag decision` in a terminal")
         question = (args.get("question") or "").strip()
-        options = [o for o in (args.get("options") or []) if isinstance(o, str) and o.strip()]
+        # Offered as they will be compared: stripped, no empties, no repeats.
+        # " yes " used to be offered as is and then compared stripped, so the
+        # person's choice was rejected (second review, 2026-09-28).
+        options = []
+        for o in args.get("options") or []:
+            o = o.strip() if isinstance(o, str) else ""
+            if o and o not in options:
+                options.append(o)
         field = {"type": "string", "title": "Answer"}
         if options:
             field["enum"] = options
@@ -293,7 +322,7 @@ class Server:
             "message": question,
             "requestedSchema": {"type": "object", "properties": {"answer": field},
                                 "required": ["answer"]}})
-        answer, why = person_answer(reply, options)
+        answer, why = self.answer(reply, options)
         if answer is None:
             return "your user did not answer (%s); nothing was recorded" % why
         summary = (args.get("summary") or "").strip()
@@ -324,7 +353,7 @@ class Server:
             "requestedSchema": {"type": "object", "properties": {"answer": {
                 "type": "string", "title": "Endorse", "enum": ["endorse", "not now"]}},
                 "required": ["answer"]}})
-        answer, why = person_answer(reply, ["endorse", "not now"])
+        answer, why = self.answer(reply, ["endorse", "not now"])
         if answer != "endorse":
             return "your user did not endorse it (%s); nothing was added" % why
         author = {"kind": "human", "name": os.environ.get("USER") or "person",
@@ -351,7 +380,7 @@ class Server:
             "type": "object", "properties": {"answer": {"type": "string", "title": "Permission",
                                                         "enum": ["allow", "deny"]}},
             "required": ["answer"]}})
-        answer, why = person_answer(reply, ["allow", "deny"])
+        answer, why = self.answer(reply, ["allow", "deny"])
         if answer == "deny":
             return "your user declined: they chose 'deny'; the folder's projects are unchanged"
         if answer != "allow":
@@ -370,17 +399,21 @@ class Server:
 
     def reach(self, me: dict, args: dict) -> str:
         from . import config
-        folder = os.path.expanduser(args.get("dir") or "")
-        if not folder:
+        if not args.get("dir"):
             raise channel.ChannelError("dir: the folder to reach")
+        # A relative dir is the session's, and the person's terminal may be
+        # anywhere: the form, the command offered instead and the reach itself
+        # all name the same absolute root. "../other" was quoted raw in the
+        # command while the form showed the root (second review, 2026-09-28).
+        folder = os.path.join(me.get("cwd") or os.getcwd(), os.path.expanduser(args["dir"]))
+        root = config.project_root(folder)
         if args.get("drop"):
-            return "dropped %d reach(es)" % config.drop_reach(me.get("ref"), folder, session=me)
-        command = "xsm reach %s --session %s" % (shlex.quote(folder),
+            return "dropped %d reach(es)" % config.drop_reach(me.get("ref"), root, session=me)
+        command = "xsm reach %s --session %s" % (shlex.quote(root),
                                                  shlex.quote("ref:%s" % me.get("ref")))
         if "elicitation" not in (self.client_caps or {}):
             raise channel.ChannelError("this client cannot ask its user; they can run "
                                        "`%s` in a terminal" % command)
-        root = config.project_root(folder)
         question = ("%s@%s (%s) asks to talk with the sessions in %s, both ways, until it "
                     "ends.%s\nAllow it?" % (
                         me.get("name"), me.get("alias"), me.get("ref"), root,
@@ -389,14 +422,14 @@ class Server:
             "type": "object", "properties": {"answer": {"type": "string", "title": "Permission",
                                                         "enum": ["allow", "deny"]}},
             "required": ["answer"]}})
-        answer, why = person_answer(reply, ["allow", "deny"])
+        answer, why = self.answer(reply, ["allow", "deny"])
         if answer == "deny":
             return "your user declined: they chose 'deny'; do not work around it"
         if answer != "allow":
             return ("your user did not answer (%s); do not work around it. If the form did not "
                     "reach them, they can run `%s` in a terminal instead" % (why, command))
         try:
-            entry, added = config.add_reach(me.get("ref"), folder,
+            entry, added = config.add_reach(me.get("ref"), root,
                                             os.environ.get("USER") or "person", session=me)
         except ValueError as exc:
             raise channel.ChannelError(str(exc))
@@ -422,7 +455,7 @@ class Server:
             "requestedSchema": {"type": "object", "properties": {"answer": {
                 "type": "string", "title": "Permission", "enum": [allow, deny]}},
                 "required": ["answer"]}})
-        answer, why = person_answer(reply, [allow, deny])
+        answer, why = self.answer(reply, [allow, deny])
         if answer is None:
             return ("your user did not answer (%s); the request is still waiting and the worker "
                     "is blocked until it is answered. Tell your user; they can answer it with "
@@ -459,7 +492,7 @@ class Server:
         if reply is None:
             raise channel.ChannelError("this client cannot ask its user; a person can run the "
                                        "spawn in a terminal instead")
-        answer, why = person_answer(reply, [deny, allow])
+        answer, why = self.answer(reply, [deny, allow])
         if answer is None:
             # Nobody chose, so there is no decision to put on record.
             return "your user did not answer (%s); nothing was granted — do not start that " \
@@ -487,6 +520,9 @@ class Server:
             if method == "initialize":
                 params = msg.get("params") or {}
                 self.client_caps = params.get("capabilities") or {}
+                info = params.get("clientInfo")
+                name = info.get("name") if isinstance(info, dict) else None
+                self.client_name = name if isinstance(name, str) else None
                 self.send({"id": mid, "result": {
                     "protocolVersion": params.get("protocolVersion") or PROTOCOL,
                     "capabilities": {"tools": {}},
@@ -498,7 +534,15 @@ class Server:
                 try:
                     text, error = self.call(params.get("name"), params.get("arguments") or {}), False
                 except (channel.ChannelError, EOFError) as exc:
+                    # EOFError: the client went away mid-form; the next read
+                    # ends the loop.
                     text, error = str(exc), True
+                except Exception as exc:
+                    # A tool's bug is that call's error, not the end of every
+                    # tool in the session: an exception here once went past
+                    # this loop and the server exited with no reply (second
+                    # review, 2026-09-28).
+                    text, error = "xsm failed: %s: %s" % (type(exc).__name__, exc), True
                 self.send({"id": mid, "result": {"content": [{"type": "text", "text": text}],
                                                  "isError": error}})
             elif method == "ping" and mid is not None:
