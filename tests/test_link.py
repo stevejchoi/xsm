@@ -298,6 +298,130 @@ class LinkCliTest(_Session, TempState):
         self.assertEqual([r["ref"] for r in config.reaches()], [rec["ref"]])
 
 
+class LinkUsabilityTest(_Session, TempState):
+    """Defects a reviewer found in connecting one's own sessions (2026-09-28)."""
+    _cli = LinkCliTest._cli
+
+    def _registered(self, cwd):
+        from xsm import registry
+        home = os.path.join(self.tmp, "homes", "codex")
+        os.makedirs(home, exist_ok=True)
+        registry.upsert("codex", home, "s-cli", os.getpid(), cwd, name="me")
+        return registry.by_session("codex", "s-cli")
+
+    def _in(self, folder):
+        old = os.getcwd()
+        os.chdir(folder)
+        self.addCleanup(os.chdir, old)
+
+    def test_a_relative_reach_is_the_sessions_folder_not_the_shells(self):
+        from xsm import config
+        a, b = self._dirs()
+        # From the shell's folder, ../proj-b is another folder that exists.
+        elsewhere = os.path.join(self.tmp, "x", "shell")
+        os.makedirs(os.path.join(self.tmp, "x", "proj-b"))
+        os.makedirs(elsewhere)
+        me = self._registered(a)
+        _typed(me, "reach ../proj-b")
+        self._in(elsewhere)
+        code, text = self._cli(["reach", "../proj-b"], me)
+        self.assertEqual(code, 0, text)
+        self.assertEqual([r["root"] for r in config.reaches()], [b])
+
+    def test_a_folder_not_there_yet_keeps_the_consent(self):
+        from xsm import config
+        a, _ = self._dirs()
+        me = self._me(a)
+        _typed(me, "link ../proj-new")
+        code, text = self._cli(["link", "../proj-new"], me)
+        self.assertEqual(code, 4, text)
+        self.assertEqual(config.links(), [])
+        self.assertIsNotNone(self._kept(), "the typed command is still there")
+        os.makedirs(os.path.join(self.tmp, "proj-new"))
+        code, text = self._cli(["link", "../proj-new"], me)
+        self.assertEqual(code, 0, text)
+        self.assertEqual(len(config.links()), 1)
+
+    def test_the_same_folder_or_a_bad_name_keeps_the_consent(self):
+        a, b = self._dirs()
+        me = self._registered(a)
+        _typed(me, "link .")
+        self.assertEqual(self._cli(["link", "."], me)[0], 4)
+        self.assertIsNotNone(self._kept_of(me))
+        _typed(me, "join bad/name")
+        self.assertEqual(self._cli(["join", "bad/name"], me)[0], 4)
+        self.assertIsNotNone(self._kept_of(me))
+        _typed(me, "reach ../missing")
+        self.assertEqual(self._cli(["reach", "../missing"], me)[0], 4)
+        self.assertIsNotNone(self._kept_of(me))
+
+    def _kept_of(self, me):
+        from xsm import consent, paths
+        return paths.read_json(paths.path(consent.ASKED, "%s.json" % me["ref"]))
+
+    def test_a_link_of_a_folder_above_is_shown_and_named_on_unlink(self):
+        import shlex
+        from xsm import config
+        a, b = self._dirs()
+        config.add_link(a, b, "tester")
+        sub = os.path.join(a, "sub")
+        code, text = self._cli(["projects"], self._me(sub))
+        self.assertIn("linked with: %s (via %s)" % (b, a), text)
+        code, text = self._cli(["projects", "--table"], self._me(sub))
+        self.assertIn("(via %s)" % a, text)
+        self.assertNotIn("No links", text)
+        code, text = self._cli(["unlink", b], self._me(sub))
+        self.assertEqual(code, 2)
+        self.assertIn("xsm unlink %s --dir %s" % (shlex.quote(b), shlex.quote(a)), text)
+        self.assertEqual(len(config.links()), 1, "not removed on its own")
+
+
+class InstallNoteTest(TempState):
+    def _plugin_home(self, events):
+        from xsm import paths
+        home = os.path.join(self.tmp, "plugin-home")
+        cache = os.path.join(home, "plugins", "cache", "xsm", "xsm", "0.4.3")
+        paths.write_json(os.path.join(cache, "hooks", "hooks.json"),
+                         {"hooks": {e: [] for e in events}})
+        paths.write_json(os.path.join(home, "plugins", "installed_plugins.json"),
+                         {"version": 2, "plugins": {"xsm@xsm": [
+                             {"version": "0.4.3", "installPath": cache}]}})
+        return home
+
+    def test_open_sessions_are_told_to_reconnect_after_an_install(self):
+        from xsm import cli
+        home = os.path.join(self.tmp, "claude-home")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli.main(["install", "--claude-home", home, "--no-mcp", "--python",
+                             sys.executable])
+        self.assertEqual(code, 0)
+        self.assertIn("/mcp", out.getvalue())
+        self.assertIn("new session", out.getvalue())
+
+    def test_a_plugin_without_the_hooks_of_this_checkout_is_called_older(self):
+        from xsm import cli, config, install
+        home = self._plugin_home(["SessionStart", "UserPromptSubmit", "SessionEnd",
+                                  "PermissionRequest"])
+        self.assertEqual(install.plugin_missing_hooks(home), ["UserPromptExpansion"])
+        config.add_home(home, "claude")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.main(["install", "--refresh"])
+            cli.main(["doctor"])
+        self.assertNotIn("keeps it up to date", out.getvalue())
+        self.assertEqual(out.getvalue().count("/plugin update xsm@xsm"), 2)
+        self.assertIn("UserPromptExpansion", out.getvalue())
+
+    def test_a_current_plugin_is_left_alone(self):
+        import json
+        from xsm import install
+        with open(os.path.join(install.REPO, "hooks", "hooks.json")) as fh:
+            events = list(json.load(fh)["hooks"])
+        home = self._plugin_home(events)
+        self.assertEqual(install.plugin_missing_hooks(home), [])
+
+
 class LinkMcpTest(_Folders, TempState):
     INIT = test_channel.McpServerTest.INIT
     _run = test_channel.McpServerTest._run
@@ -356,6 +480,20 @@ class LinkMcpTest(_Folders, TempState):
         out, _ = self._run(self.INIT, call, session=agent, cwd=a)
         self.assertEqual([m for m in out if m.get("method") == "elicitation/create"], [])
         self.assertEqual([r["root"] for r in config.reaches()], [b])
+
+    def test_a_folder_not_there_yet_keeps_the_consent_and_asks_nothing(self):
+        from xsm import config, consent
+        a, _ = self._dirs()
+        me = dict(AGENT, cwd=a, runtime="codex")
+        consent.record(me, _submit("$xsm link ../proj-new"))
+        forms, text = self._call({"dir": "../proj-new"}, cwd=a)
+        self.assertEqual(forms, [])
+        self.assertIn("not a folder", text)
+        os.makedirs(os.path.join(self.tmp, "proj-new"))
+        forms, text = self._call({"dir": "../proj-new"}, cwd=a)
+        self.assertEqual(forms, [], "the typed command was kept for the retry")
+        self.assertIn("linked", text)
+        self.assertEqual(len(config.links()), 1)
 
 
 if __name__ == "__main__":

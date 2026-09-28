@@ -2478,6 +2478,28 @@ class NestedRuntimeTest(_EnvMixin, TempState):
                        claude_start="Mon Sep 28 09:00:00 2026")
         self.assertEqual(registry.me(cwd=self.tmp)["session_id"], "t-parent")
 
+    def test_what_the_inner_sessions_hook_saw_outweighs_start_order(self):
+        """The outer Codex resumed, so its record started later than the Claude
+        inside it, and start order gave that Claude's shell to the Codex
+        (review, 2026-09-28). The Claude's own hook saw the thread's id."""
+        from xsm import identity, registry
+        starts = {1111: "Mon Sep 28 09:00:00 2026", 2222: "Mon Sep 28 10:00:00 2026"}
+        identity.lstart = lambda pid: starts.get(pid)
+        registry.upsert("claude", self.chome, "s-worker", 1111, self.tmp, name="worker",
+                        inside="t-parent")
+        registry.upsert("codex", self.xhome, "t-parent", 2222, self.tmp, name="parent",
+                        inside=None)
+        identity.lstart = lambda pid: None
+        self._env(CLAUDE_CODE_SESSION_ID="s-worker", CODEX_THREAD_ID="t-parent")
+        self.assertEqual(registry.me(cwd=self.tmp)["session_id"], "s-worker")
+        # Adoption does not know it and leaves it as it was.
+        registry.upsert("claude", self.chome, "s-worker", 1111, self.tmp)
+        self.assertEqual(registry.me(cwd=self.tmp)["session_id"], "s-worker")
+        # The other way round: a Codex started from the Claude's shell.
+        registry.upsert("claude", self.chome, "s-worker", 1111, self.tmp, inside=None)
+        registry.upsert("codex", self.xhome, "t-parent", 2222, self.tmp, inside="s-worker")
+        self.assertEqual(registry.me(cwd=self.tmp)["session_id"], "t-parent")
+
     def test_a_session_whose_process_is_gone_is_not_this_one(self):
         from xsm import registry
         self._register()

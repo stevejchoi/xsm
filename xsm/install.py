@@ -156,13 +156,38 @@ def plugin_installed(home: str) -> str | None:
     hook twice — the second run of the receive gate would see its own receipt
     and refuse the message as a duplicate — so each install path checks for
     the other."""
+    entry = _plugin_entry(home)
+    return None if entry is None else entry.get("version") or "installed"
+
+
+def _plugin_entry(home: str) -> dict | None:
     state = paths.read_json(os.path.join(os.path.expanduser(home), "plugins",
                                          "installed_plugins.json"), {}) or {}
     for key, entries in (state.get("plugins") or {}).items():
         if key == PLUGIN_NAME or key.startswith(PLUGIN_NAME + "@"):
             for entry in entries if isinstance(entries, list) else [entries]:
-                return (entry or {}).get("version") or "installed"
+                return entry if isinstance(entry, dict) else {}
     return None
+
+
+def plugin_missing_hooks(home: str) -> list:
+    """The hook events this checkout's hooks/hooks.json has and the installed
+    plugin's copy lacks. A version string does not tell: the plugin cache kept
+    a hooks.json without UserPromptExpansion, so a typed /xsm link was never
+    recorded, while doctor and --refresh said the plugin kept itself up to
+    date (review, 2026-09-28). Empty when there is no plugin or its folder
+    cannot be read."""
+    path = (_plugin_entry(home) or {}).get("installPath")
+    if not path or not os.path.isdir(path):
+        return []
+    want = (paths.read_json(os.path.join(REPO, "hooks", "hooks.json"), {}) or {}).get("hooks") or {}
+    have = (paths.read_json(os.path.join(path, "hooks", "hooks.json"), {}) or {}).get("hooks") or {}
+    return [event for event in want if event not in have]
+
+
+def plugin_outdated_note(missing: list) -> str:
+    return ("the installed plugin is older than this checkout (no %s hook): run /plugin update "
+            "xsm@xsm, then start a new session" % ", ".join(missing))
 
 
 def leftovers(home: str) -> list:
@@ -718,6 +743,8 @@ def doctor() -> dict:
         "tmux": shutil.which("tmux"),
         "plugins": {h["path"]: plugin_installed(h["path"]) for h in homes
                     if h.get("runtime") == "claude"},
+        "plugin_missing_hooks": {h["path"]: plugin_missing_hooks(h["path"]) for h in homes
+                                 if h.get("runtime") == "claude"},
         "stale": {h["path"]: stale_copies(h["path"], h.get("runtime") or "claude")
                   for h in homes},
         "leftovers": {h["path"]: leftovers(h["path"]) for h in homes

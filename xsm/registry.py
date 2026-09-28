@@ -26,7 +26,8 @@ def _record_path(runtime: str, session_id: str) -> str:
 
 def upsert(runtime: str, home: str, session_id: str, pid: int, cwd: str,
            permission_mode: str | None = None, name: str | None = None,
-           mcp_pid: int | None = None, socket: str | None = None) -> dict:
+           mcp_pid: int | None = None, socket: str | None = None,
+           inside: str | None | bool = False) -> dict:
     home = os.path.realpath(os.path.expanduser(home))
     record = paths.read_json(_record_path(runtime, session_id), {}) or {}
     previous_pid = record.get("pid")
@@ -69,6 +70,14 @@ def upsert(runtime: str, home: str, session_id: str, pid: int, cwd: str,
         else:
             record.pop("mcp_pid", None)
             record.pop("mcp_lstart", None)
+    if inside is not False:
+        # The other runtime's id this session was started with (its own hook
+        # inherits it): the session runs inside that one's shell. Only the
+        # session's own hook knows it; adoption leaves it as it was.
+        if inside:
+            record["inside"] = str(inside)
+        else:
+            record.pop("inside", None)
     paths.write_json(_record_path(runtime, session_id), record)
     if not any(h.get("path") == home for h in config.homes()):
         config.add_home(home, runtime)
@@ -569,7 +578,8 @@ def _nested_runtime(rows: list, own_session: str, thread: str) -> str:
     """The runtime of a shell carrying both ids when the process walk cannot
     run. One of the two sessions was started from the other's shell, so:
     a session whose process is gone is not the one running this; of two
-    live ones the later started is the inner one, the one whose shell this
+    live ones the one whose hook saw the other's id is the inner one; else
+    the later started is, the one whose shell this
     is (both start times were taken by hooks, outside any sandbox); then
     the sandbox markers each side sets (xsm's for a Claude worker, Codex's
     own); then whichever id has a record. Only when none of that points
@@ -585,6 +595,15 @@ def _nested_runtime(rows: list, own_session: str, thread: str) -> str:
         return "codex"
     if codex and not identity.pid_alive(codex.get("pid")):
         return "claude"
+    # What each session's own hook saw: the other runtime's id in the
+    # environment it was started with means it runs inside that one's shell,
+    # so it is the inner session, whose shell this is. Start order said the
+    # opposite once the outer Codex resumed and its record's start time
+    # became the newer one (review, 2026-09-28).
+    claude_inside = (claude or {}).get("inside") == thread
+    codex_inside = (codex or {}).get("inside") == own_session
+    if claude_inside != codex_inside:
+        return "claude" if claude_inside else "codex"
     ours, theirs = _started(claude), _started(codex)
     if ours and theirs and ours != theirs:
         return "claude" if ours > theirs else "codex"

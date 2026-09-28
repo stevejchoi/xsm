@@ -10,6 +10,7 @@ import argparse
 import glob
 import json
 import os
+import shlex
 import shutil
 import sys
 import time
@@ -301,6 +302,11 @@ def _person_or_refuse(what: str, mcp_tool: str, typed: tuple | None = None) -> s
 
 
 def cmd_join(args) -> int:
+    try:
+        config.check_join(args.project)         # before the typed consent is used up
+    except ValueError as exc:
+        print("refused: %s" % exc, file=sys.stderr)
+        return USAGE
     why = _person_or_refuse("joining a project", "xsm_join", ("join", args.project))
     if why:
         print("refused: %s" % why, file=sys.stderr)
@@ -377,19 +383,30 @@ def cmd_reach(args) -> int:
     if not me or not me.get("ref"):
         print("refused: which session? name it with --session ref:xxxxxx", file=sys.stderr)
         return USAGE
+    # A relative folder is the session's, as consent.take reads it: resolved
+    # once, so the consent check and the reach name the same folder. The raw
+    # string went to add_reach and was read against the shell's cwd, so after
+    # a `cd` another folder was allowed (review, 2026-09-28).
+    folder = os.path.join(me.get("cwd") or os.getcwd(), os.path.expanduser(args.folder)) \
+        if args.folder else None
     if args.drop:
-        n = config.drop_reach(me["ref"], args.folder, session=me)
+        n = config.drop_reach(me["ref"], folder, session=me)
         print("dropped %d reach(es) of ref:%s" % (n, me["ref"]))
         return OK
+    try:
+        config.check_reach(folder)              # before the typed consent is used up
+    except ValueError as exc:
+        print("refused: %s" % exc, file=sys.stderr)
+        return USAGE
     # The typed command is consent only for the session that typed it.
     caller = registry.me()
-    typed = ("reach", args.folder) if caller and caller.get("ref") == me.get("ref") else None
+    typed = ("reach", folder) if caller and caller.get("ref") == me.get("ref") else None
     why = _person_or_refuse("letting a session reach another folder", "xsm_reach", typed)
     if why:
         print("refused: %s" % why, file=sys.stderr)
         return REFUSED
     try:
-        entry, added = config.add_reach(me["ref"], args.folder, os.environ.get("USER") or "person",
+        entry, added = config.add_reach(me["ref"], folder, os.environ.get("USER") or "person",
                                         session=me)
     except ValueError as exc:
         print("refused: %s" % exc, file=sys.stderr)
@@ -401,13 +418,10 @@ def cmd_reach(args) -> int:
 
 
 def _links_here(root: str) -> list:
-    """The folders linked with this project folder."""
-    out = []
-    for ln in config.links():
-        a, b = os.path.realpath(ln.get("a") or ""), os.path.realpath(ln.get("b") or "")
-        if root in (a, b):
-            out.append(b if a == root else a)
-    return out
+    """The folders linked with this project folder, each as its label: a link
+    of a folder above this one covers it too, and says so."""
+    return [_home_tilde(other) + ("" if mine == root else " (via %s)" % _home_tilde(mine))
+            for mine, other in config.links_covering(root)]
 
 
 def cmd_link(args) -> int:
@@ -420,9 +434,11 @@ def cmd_link(args) -> int:
             print("no links. Link another folder with: /xsm link <folder>  (Codex: $xsm link "
                   "<folder>)")
         for ln in rows:
-            mine = root in (os.path.realpath(ln.get("a") or ""), os.path.realpath(ln.get("b") or ""))
+            ends = (os.path.realpath(ln.get("a") or ""), os.path.realpath(ln.get("b") or ""))
+            via = any(root.startswith(e.rstrip("/") + "/") for e in ends)
             print("%s <-> %s%s" % (_home_tilde(ln.get("a", "")), _home_tilde(ln.get("b", "")),
-                                   "  (this folder)" if mine else ""))
+                                   "  (this folder)" if root in ends else
+                                   "  (covers this folder)" if via else ""))
         return OK
     other = config.project_root(os.path.join(here, os.path.expanduser(args.folder)))
     if args.command == "unlink":
@@ -430,8 +446,22 @@ def cmd_link(args) -> int:
         if config.drop_link(here, other):
             print("unlinked: %s and %s" % (_home_tilde(root), _home_tilde(other)))
             return OK
+        # The link that applies may be a folder above this one's (review,
+        # 2026-09-28): name it and the command that removes it, and leave it.
+        above = [m for m, o in config.links_covering(root) if m != root and o == other]
+        if above:
+            print("no link of %s itself; it is linked with %s through %s. Remove that link "
+                  "with: xsm unlink %s --dir %s" % (
+                      _home_tilde(root), _home_tilde(other), _home_tilde(above[0]),
+                      shlex.quote(other), shlex.quote(above[0])), file=sys.stderr)
+            return REFUSED
         print("no link between %s and %s" % (_home_tilde(root), args.folder), file=sys.stderr)
         return REFUSED
+    try:
+        config.check_link(here, other)          # before the typed consent is used up
+    except ValueError as exc:
+        print("refused: %s" % exc, file=sys.stderr)
+        return USAGE
     why = _person_or_refuse("linking two folders", "xsm_link", ("link", other, here))
     if why:
         print("refused: %s" % why, file=sys.stderr)
@@ -505,7 +535,7 @@ def cmd_projects(args) -> int:
                               _home_tilde(m.get("root", "")) + (" (this folder)" if mine else ""),
                               ""))
         for other in _links_here(root):
-            table.append(("linked", _home_tilde(other), ""))
+            table.append(("linked", other, ""))
         print("\n".join(_md_table(["project", "folder", "member of"], table)))
         if not config.projects() and not _links_here(root):
             print("\nNo links or named projects yet. Connect another folder with `/xsm link <folder>` "
@@ -513,7 +543,7 @@ def cmd_projects(args) -> int:
         return OK
     print("this folder (%s) is in: %s" % (_home_tilde(root), ", ".join(_memberships(here))))
     for other in _links_here(root):
-        print("linked with: %s" % _home_tilde(other))
+        print("linked with: %s" % other)
     rows = config.projects()
     if not rows:
         print("no named projects. Connect another folder with: /xsm link <folder>  (or xsm link "
@@ -768,8 +798,10 @@ def cmd_install(args) -> int:
             # Refreshing every home it knows must not stop at one that has
             # moved to the plugin; the plugin updates itself by version. What
             # an earlier direct install left there is still ours to clear.
-            print("%s: the xsm plugin (%s) keeps it up to date; skipped"
-                  % (_home_tilde(home), plugin))
+            missing = install.plugin_missing_hooks(home)
+            print("%s: the xsm plugin (%s) %s; skipped" % (
+                _home_tilde(home), plugin, install.plugin_outdated_note(missing) if missing
+                else "keeps it up to date"))
             _print_retired(home, install.remove_retired(home))
             targets.remove((home, runtime))
             continue
@@ -780,6 +812,22 @@ def cmd_install(args) -> int:
     if not targets:
         print("every home xsm knows is on the plugin; nothing to refresh")
         return OK
+    code = _install(args, targets)
+    if code == OK and not args.dry_run:
+        print(RESTART_NOTE)
+    return code
+
+
+# Printed after every install: a running MCP server keeps the tool list it
+# started with, so a session opened before an update had no xsm_link while its
+# newly loaded skill told it to call one (review, 2026-09-28).
+RESTART_NOTE = ("Sessions already open keep the xsm tools and hooks they started with: start a new "
+                "session, or reconnect the MCP server (Claude Code: /mcp, then xsm), to use new "
+                "ones. Until then, run the command in a terminal yourself (e.g. `xsm link "
+                "<folder> --dir <this folder>`).")
+
+
+def _install(args, targets) -> int:
     try:
         chosen = install.resolve_python(args.python)
     except ValueError as err:
@@ -913,7 +961,9 @@ def cmd_doctor(args) -> int:
         print("tmux       not found: `xsm spawn` needs it (messaging does not)")
     for home, plugin in (report.get("plugins") or {}).items():
         if plugin:
-            print("plugin     %-45s xsm %s" % (_home_tilde(home), plugin))
+            missing = (report.get("plugin_missing_hooks") or {}).get(home)
+            print("plugin     %-45s xsm %s%s" % (_home_tilde(home), plugin, (
+                "  " + install.plugin_outdated_note(missing)) if missing else ""))
     for home, files in (report.get("stale") or {}).items():
         if files:
             print("stale      %s: %d file(s) behind the repo; refresh with `xsm install --refresh`"
@@ -974,6 +1024,10 @@ def _doctor_rows(report: dict) -> list:
             "xsm hooks not installed" if not trust else "hooks trusted" if not missing else
             "**NOT trusted** for %s: start codex there and choose 'Trust all and continue'"
             % ", ".join(missing)))))
+    for home, missing in (report.get("plugin_missing_hooks") or {}).items():
+        if missing:
+            rows.append(("plugin", "%s: %s" % (_home_tilde(home),
+                                               install.plugin_outdated_note(missing))))
     for note in report["limits"]:
         rows.append(("limit", note))
     return rows
