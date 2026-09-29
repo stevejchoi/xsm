@@ -860,7 +860,7 @@ def _install(args, targets) -> int:
         else:
             print("installed into %s (backup: %s)" % (result["file"], result.get("backup", "none")))
         _print_retired(home, install.remove_retired(home))
-        if runtime == "codex" or args.refresh:
+        if runtime == "codex":
             cli_state = install.install_cli()
             if cli_state == "foreign":
                 print("  cli: link bin/xsm onto PATH yourself: ln -s %s <directory-on-PATH>/xsm"
@@ -875,7 +875,7 @@ def _install(args, targets) -> int:
                 "linked": "linked to the repo",
                 "copy-current": "a copy is in place and matches the repo",
                 "copy-stale": "a copy has fallen behind; refresh it with `xsm install --refresh`",
-                "link-stale": "linked to an older checkout; refresh it with `xsm install --refresh`",
+                "link-stale": "linked to an older plugin version; refresh it with `xsm install --refresh`",
                 "nested-link": "a link sits inside the existing directory (%s);\n"
                                "           remove it: rm %s" % (detail, detail),
                 "foreign": "something else is at skills/xsm; left alone",
@@ -883,7 +883,7 @@ def _install(args, targets) -> int:
             print("  commands: %s" % ("/xsm list, /xsm send <target> <message>, … "
                                       "(the skill takes them as arguments)" if runtime == "claude"
                                       else "$xsm list, $xsm send <target> <message>, …"))
-            if not (runtime == "codex" or args.refresh) and not shutil.which("xsm"):
+            if runtime != "codex" and not shutil.which("xsm"):
                 print("  warning: `xsm` is not on PATH, and the skill runs it by that name. "
                       "Link it: ln -s %s ~/.local/bin/xsm" % install.launcher())
         if runtime == "claude" and args.statusline:

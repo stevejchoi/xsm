@@ -29,12 +29,19 @@ class CodexInstallTest(unittest.TestCase):
             link.symlink_to(foreign)
             self.assertEqual(install.install_cli(), "foreign")
             self.assertEqual(link.readlink(), foreign)
+            # A person's own checkout stays linked; only a plugin version moves.
             checkout = Path(tmp) / "checkout"
-            (checkout / "xsm").mkdir(parents=True)
-            (checkout / "xsm/install.py").touch()
-            (checkout / "bin").mkdir()
-            (checkout / "bin/xsm").touch()
-            for old in (checkout / "bin/xsm", Path(tmp) / "plugins/cache/xsm/xsm/0.4.5/bin/xsm"):
+            cached = Path(tmp) / "plugins/cache/xsm/xsm/0.4.4"
+            for repo in (checkout, cached):
+                (repo / "xsm").mkdir(parents=True)
+                (repo / "xsm/install.py").touch()
+                (repo / "bin").mkdir()
+                (repo / "bin/xsm").touch()
+            link.unlink()
+            link.symlink_to(checkout / "bin/xsm")
+            self.assertEqual(install.install_cli(), "foreign")
+            self.assertEqual(link.readlink(), checkout / "bin/xsm")
+            for old in (cached / "bin/xsm", Path(tmp) / "plugins/cache/xsm/xsm/0.4.5/bin/xsm"):
                 link.unlink()
                 link.symlink_to(old)
                 self.assertEqual(install.install_cli(), "replaced")
@@ -90,12 +97,11 @@ class CodexInstallTest(unittest.TestCase):
             spec = importlib.util.spec_from_file_location("xsm.install", new / "xsm/install.py")
             install = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(install)
-            state, _ = install.skill_state(str(home))
+            self.assertEqual(install.skill_state(str(home))[0], "link-stale")
             self.assertEqual(install.install_skill(str(home))[0], "link-stale")
             self.assertEqual(link.resolve(), old / "skills/xsm")
             self.assertEqual(install.stale_copies(str(home), "codex"), [str(link)])
             install.install_skill(str(home), refresh=True)
-            self.assertIn("stale", state)
             self.assertEqual(link.resolve(), new / "skills/xsm")
             link.unlink()
             link.symlink_to(old / "skills/xsm")
@@ -111,6 +117,12 @@ class CodexInstallTest(unittest.TestCase):
             link.symlink_to(foreign)
             self.assertEqual(install.install_skill(str(home), refresh=True)[0], "foreign")
             self.assertEqual(link.readlink(), foreign)
+            link.unlink()
+            checkout = Path(tmp) / "checkout/skills/xsm"
+            shutil.copytree(REPO / "skills/xsm", checkout)
+            link.symlink_to(checkout)
+            self.assertEqual(install.install_skill(str(home), refresh=True)[0], "foreign")
+            self.assertEqual(link.readlink(), checkout)
 
 
 if __name__ == "__main__":
