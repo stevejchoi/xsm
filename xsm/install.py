@@ -1,7 +1,7 @@
 """Installing the hooks into a home without disturbing what is already there.
 
 These files are crowded: a Claude settings.json on this machine already holds
-Orca, cctrace and the user's own prompt hooks, and ~/.codex/hooks.json holds
+Orca, cctrace(씨씨트레이스) and the user's own prompt hooks, and ~/.codex/hooks.json holds
 Orca's. So the installer never rewrites a hook it did not write. It appends
 one group per event, marks the command with a trailing `#xsm-hook`, and
 removes exactly the marked groups on uninstall. Every write is preceded by a
@@ -148,6 +148,30 @@ def launcher() -> str:
     return os.path.join(REPO, "bin", "xsm")
 
 
+def install_cli() -> str:
+    """Link the launcher on PATH, replacing only another xsm checkout's link."""
+    target = os.path.expanduser("~/.local/bin/xsm")
+    state = "linked"
+    if os.path.islink(target):
+        source = os.path.realpath(target)
+        if source == os.path.realpath(launcher()):
+            return "current"
+        repo = os.path.dirname(os.path.dirname(source))
+        if os.path.exists(source):
+            ours = source.endswith("/bin/xsm") and os.path.isfile(os.path.join(repo, "xsm", "install.py"))
+        else:
+            ours = re.search(r"/plugins/cache/xsm/xsm/[^/]+/bin/xsm$", source)
+        if not ours:
+            return "foreign"
+        os.unlink(target)
+        state = "replaced"
+    elif os.path.lexists(target):
+        return "foreign"
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    os.symlink(launcher(), target)
+    return state
+
+
 def plugin_installed(home: str) -> str | None:
     """The xsm plugin's version in this Claude home, or None.
 
@@ -207,7 +231,7 @@ def stale_copies(home: str, runtime: str = "claude") -> list:
     if runtime == "claude" and plugin_installed(home):
         return []                       # the plugin keeps itself current
     state, detail = skill_state(home)
-    return [detail] if state == "copy-stale" else []
+    return [detail] if state in ("copy-stale", "link-stale") else []
 
 
 def _skill_tree() -> dict:
@@ -230,6 +254,7 @@ def skill_state(home: str) -> tuple:
     """(state, detail) for the skill in this home.
 
     linked        our symlink, in step with the repo
+    link-stale    a link to another version of the xsm skill
     copy-current  a copied skill directory whose files all match ours
     copy-stale    a copied skill directory that has fallen behind
     nested-link   a link made *inside* an existing directory (ln -sfn into a dir)
@@ -239,8 +264,13 @@ def skill_state(home: str) -> tuple:
     target = os.path.join(home, "skills", "xsm")
     source = os.path.join(REPO, "skills", "xsm")
     if os.path.islink(target):
-        return ("linked" if os.path.realpath(target) == os.path.realpath(source)
-                else "foreign"), target
+        if os.path.realpath(target) == os.path.realpath(source):
+            return "linked", target
+        if not os.path.exists(target) and re.search(
+                r"/plugins/cache/xsm/xsm/[^/]+/skills/xsm$", os.path.realpath(target)):
+            return "link-stale", target
+        header = (_read_text(os.path.join(target, "SKILL.md")) or "").splitlines()[:20]
+        return ("link-stale" if "name: xsm" in header else "foreign"), target
     if not os.path.exists(target):
         return "absent", target
     nested = os.path.join(target, "xsm")
@@ -263,6 +293,10 @@ def install_skill(home: str, refresh: bool = False) -> tuple:
     it: it is ours, and telling a person to run `cp` is how two profiles ended
     up eight versions behind (2026-09-23)."""
     state, detail = skill_state(home)
+    # 옛 링크 제거 및 상태 변경
+    if state == "link-stale" and refresh:
+        os.unlink(detail)
+        state = "absent"
     if state == "copy-stale" and refresh:
         for rel, text in _skill_tree().items():
             target = os.path.join(detail, rel)
